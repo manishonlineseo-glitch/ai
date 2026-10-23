@@ -6,5 +6,14 @@
     "notepad": "C:\\Windows\\notepad.exe",
     "calculator": "C:\\Windows\\System32\\calc.exe"
   },
-  "allowed_actions": ["cpu_status", "speak", "open_url", "open_app", "lock", "shutdown", "restart", "cancel_shutdown"]
+  "projects": {
+    "jarvis": "C:\\xampp\\htdocs\\ai"
+  },
+  "claude": {
+    "command": "claude",
+    "timeout_minutes": 30,
+    "max_turns": 25,
+    "max_budget_usd": 2.0
+  },
+  "allowed_actions": ["cpu_status", "speak", "open_url", "open_app", "lock", "shutdown", "restart", "cancel_shutdown", "claude_read"]
 }

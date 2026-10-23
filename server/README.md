@@ -54,6 +54,22 @@ decision, so text inside a note or web page can't approve anything. Longer sente
 Turn on "Jawab bol kar sunao" and Jarvis also reads each new approval aloud.
 **shutdown/restart can't be approved by voice**, only by tapping the button (a misheard word must not power off a PC).
 
+## Work on your laptop from your phone (Claude Code)
+Same idea as logging in on phone and laptop and telling the phone what to do. The phone talks to Jarvis, Jarvis
+sends the job to the **PC agent**, and the agent runs **Claude Code** headless (`claude -p`) in a project folder you allowed.
+(Anthropic also has an official version, **Claude Remote Control** (`claude remote-control`), which drives a full
+Claude Code session from the Claude app. Use that if you want the complete interactive experience.)
+
+1. On the laptop install Claude Code (native installer from claude.ai/install) and run `claude auth login` once.
+2. In `agent/config.json` add the folders it may touch under `"projects"` (name: path) and list `"claude_read"` in
+   `allowed_actions`. `claude_work` (can edit files) stays **off** until you add it yourself.
+3. Say it in chat: *"Home-PC par jarvis project ka status check karo"*. Approve the card, the answer appears in chat when done.
+   Then: *"ab footer ka typo theek karo"* uses `claude_work` with `continue` so it picks up the same session.
+- `claude_read`: reads files and read-only `git` only. `claude_work`: may edit files and run a short allow-list
+  (`git status/diff`, `php -l`, `node --check`, `py_compile`); change it under `claude.work` in config.json.
+- Limits per task: 25 turns, 2 USD, 30 minutes (configurable). One Claude task at a time per PC.
+- `claude_work` can only be approved by **tapping** (never by voice). Tasks run with your Claude login on that laptop.
+
 ## Safety model
 - API key lives only in `config.php` on the server.
 - Every device has its own token; block/delete kills it at once. Agent tokens can't use the browser API.

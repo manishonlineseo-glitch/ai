@@ -175,6 +175,9 @@ button.danger { color: var(--danger); border-color: var(--danger); }
   .hud-card { scroll-snap-align: start; max-height: 30vh; overflow-y: auto; }
 }
 
+.result-full { white-space: pre-wrap; max-height: 50vh; overflow-y: auto; margin-top: 6px; }
+details summary { cursor: pointer; color: var(--hud); font-size: .85rem; }
+.msg.note { white-space: pre-wrap; }
 .pair-code { font-size: 2rem; font-weight: 700; letter-spacing: .18em; text-align: center; padding: 14px; margin: 10px 0 4px; background: var(--user); border-radius: 12px; user-select: all; }
 
 /* ---------- lists ---------- */

@@ -1,7 +1,7 @@
 <?php
 declare(strict_types=1);
 
-const PC_ACTIONS = ['cpu_status', 'speak', 'open_url', 'open_app', 'lock', 'shutdown', 'restart', 'cancel_shutdown'];
+const PC_ACTIONS = ['cpu_status', 'speak', 'open_url', 'open_app', 'lock', 'shutdown', 'restart', 'cancel_shutdown', 'claude_read', 'claude_work'];
 
 /** Validate and normalise arguments for one PC action; throws on anything odd. */
 function clean_pc_args(string $action, array $in): array
@@ -23,6 +23,17 @@ function clean_pc_args(string $action, array $in): array
                 throw new InvalidArgumentException('app ka naam galat hai');
             }
             return ['app' => $app];
+        case 'claude_read':
+        case 'claude_work':
+            $project = trim((string) ($in['project'] ?? ''));
+            $prompt = trim((string) ($in['prompt'] ?? ''));
+            if (!preg_match('/^[A-Za-z0-9 _.\-]{1,40}$/', $project)) {
+                throw new InvalidArgumentException('project ka naam galat hai (agent ke config me jo naam hai wahi do)');
+            }
+            if ($prompt === '' || mb_strlen($prompt) > 4000) {
+                throw new InvalidArgumentException('prompt 1-4000 akshar ka chahiye');
+            }
+            return ['project' => $project, 'prompt' => $prompt, 'continue' => !empty($in['continue'])];
         case 'speak':
             $text = trim((string) ($in['text'] ?? ''));
             if ($text === '' || mb_strlen($text) > 300) {
@@ -172,6 +183,9 @@ function claude_tools(): array
              'url'    => ['type' => 'string', 'description' => 'For open_url'],
              'app'    => ['type' => 'string', 'description' => 'For open_app: a name from the agent\'s allowlist'],
              'text'   => ['type' => 'string', 'description' => 'For speak'],
+             'project'  => ['type' => 'string', 'description' => 'For claude_read/claude_work: project name from the PC agent\'s allowlist'],
+             'prompt'   => ['type' => 'string', 'description' => 'For claude_read/claude_work: the full instruction for Claude Code on that PC'],
+             'continue' => ['type' => 'boolean', 'description' => 'For claude_read/claude_work: continue the previous Claude Code session of that project'],
          ], 'required' => ['device', 'action']]],
     ];
 }

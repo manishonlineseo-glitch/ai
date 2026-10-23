@@ -377,6 +377,9 @@ switch ($route) {
         $st->execute([$me['user_id']]);
         $rows = array_map(function ($r) {
             $r['args'] = json_decode($r['args'], true) ?: new stdClass();
+            // Long Claude Code answers are fetched on demand (command_result), not on every poll.
+            $r['result_len'] = mb_strlen((string) $r['result']);
+            $r['result'] = $r['result'] === null ? null : mb_substr($r['result'], 0, 1500);
             return $r;
         }, $st->fetchAll());
         $st = $pdo->prepare(
@@ -385,6 +388,16 @@ switch ($route) {
         );
         $st->execute([$me['user_id']]);
         json_out(['commands' => $rows, 'messages' => $st->fetchAll()]);
+
+    case 'command_result':
+        $me = require_client();
+        $st = $pdo->prepare('SELECT action, status, result FROM commands WHERE id = ? AND user_id = ?');
+        $st->execute([(int) ($_GET['id'] ?? 0), $me['user_id']]);
+        $row = $st->fetch();
+        if (!$row) {
+            fail('Nahi mila', 404);
+        }
+        json_out($row);
 
     case 'message_decide':
         $me = require_client();
@@ -405,8 +418,12 @@ switch ($route) {
         $pct = static fn(string $k): ?float => isset($_GET[$k]) && is_numeric($_GET[$k]) ? max(0.0, min(100.0, (float) $_GET[$k])) : null;
         $pdo->prepare('UPDATE devices SET cpu = ?, ram = ?, battery = ?, metrics_at = ? WHERE id = ?')
             ->execute([$pct('cpu'), $pct('ram'), $pct('bat'), time(), $agent['id']]);
-        $pdo->prepare('UPDATE commands SET status = "failed", result = "timeout", updated_at = ? WHERE device_id = ? AND status = "running" AND updated_at < ?')
-            ->execute([time(), $agent['id'], time() - 120]);
+        // Claude Code tasks may run for many minutes; everything else should answer within two.
+        $pdo->prepare(
+            'UPDATE commands SET status = "failed", result = "timeout", updated_at = ?
+             WHERE device_id = ? AND status = "running"
+               AND updated_at < CASE WHEN action LIKE "claude\_%" ESCAPE "\" THEN ? ELSE ? END'
+        )->execute([time(), $agent['id'], time() - 2400, time() - 120]);
         $pdo->prepare('UPDATE commands SET status = "expired", updated_at = ? WHERE device_id = ? AND status IN ("pending","awaiting_confirm") AND created_at < ?')
             ->execute([time(), $agent['id'], time() - 600]);
         $st = $pdo->prepare('SELECT id, action, args FROM commands WHERE device_id = ? AND status = "pending" ORDER BY id LIMIT 5');
@@ -422,10 +439,13 @@ switch ($route) {
 
     case 'agent_result':
         $agent = require_agent();
+        $act = $pdo->prepare('SELECT action FROM commands WHERE id = ? AND device_id = ?');
+        $act->execute([(int) ($in['id'] ?? 0), $agent['id']]);
+        $limit = str_starts_with((string) $act->fetchColumn(), 'claude_') ? 20000 : 2000;
         $st = $pdo->prepare('UPDATE commands SET status = ?, result = ?, updated_at = ? WHERE id = ? AND device_id = ? AND status = "running"');
         $st->execute([
             empty($in['ok']) ? 'failed' : 'done',
-            mb_substr((string) ($in['result'] ?? ''), 0, 2000),
+            mb_substr((string) ($in['result'] ?? ''), 0, $limit),
             time(), (int) ($in['id'] ?? 0), $agent['id'],
         ]);
         json_out(['ok' => $st->rowCount() > 0]);

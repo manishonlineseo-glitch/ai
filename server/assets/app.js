@@ -127,7 +127,7 @@ async function tryVoiceDecision(text) {
   if (!v) return false;
   const item = pendingList[0];
   if (v === 'yes' && item.danger) {
-    note('Ye risky hai (shutdown/restart). Screen par Approve tap karo.');
+    note('Ye risky hai (files badalna / shutdown). Screen par Approve tap karo.');
     return true;
   }
   await decide(item.route, item.id, v === 'yes');
@@ -266,6 +266,7 @@ async function tick() {
   try {
     const { commands, messages } = await api('commands');
     renderPending(commands, messages || []);
+    announceFinished(commands);
     refreshHud();
     if (tab === 'devices') { renderRecent(commands); loadDevices(); }
   } catch (x) { if (x.status === 401) boot(); }
@@ -273,15 +274,34 @@ async function tick() {
 
 function describe(c) {
   const a = c.args || {};
+  if (c.action.startsWith('claude_')) {
+    return (c.action === 'claude_work' ? 'Claude kaam (files badal sakta hai)' : 'Claude padhai (read-only)') +
+      ' · ' + c.device + ' · project ' + a.project + (a.continue ? ' · pichla session jaari' : '') + '\n' + a.prompt;
+  }
   const detail = a.url || a.app || a.text || '';
   return c.action + (detail ? ' → ' + detail : '') + ' (' + c.device + ')';
+}
+
+// Finished Claude tasks are announced in the chat (or shown when the chat is next opened).
+let finishedSeen = null;
+let missedNotes = [];
+function announceFinished(cmds) {
+  const done = cmds.filter((c) => c.action.startsWith('claude_') && (c.status === 'done' || c.status === 'failed'));
+  if (finishedSeen === null) { finishedSeen = new Set(done.map((c) => c.id)); return; } // first load: stay quiet
+  for (const c of done.reverse()) {
+    if (finishedSeen.has(c.id)) continue;
+    finishedSeen.add(c.id);
+    const more = c.result_len > 1500 ? '\n… (poora jawab Devices > Recent PC actions me)' : '';
+    const text = (c.status === 'done' ? 'Laptop ka kaam khatam (' + c.device + '):\n' : 'Laptop ka kaam fail hua (' + c.device + '):\n') + (c.result || '') + more;
+    if (noteHook) note(text); else missedNotes.push(text);
+  }
 }
 
 function renderPending(cmds, msgs) {
   pendingList = [
     ...cmds.filter((c) => c.status === 'awaiting_confirm').map((c) => ({
       route: 'command_decide', id: c.id, title: 'PC action: approval chahiye', text: describe(c),
-      spoken: c.action.replace('_', ' ') + ' on ' + c.device, danger: ['shutdown', 'restart'].includes(c.action),
+      spoken: c.action.replace('_', ' ') + ' on ' + c.device, danger: ['shutdown', 'restart', 'claude_work'].includes(c.action),
     })),
     ...msgs.filter((m) => m.status === 'awaiting_confirm').map((m) => ({
       route: 'message_decide', id: m.id, title: 'WhatsApp → ' + m.contact + ': approval chahiye', text: m.body,
@@ -422,6 +442,7 @@ function viewChat(view) {
     return m;
   };
   noteHook = (t) => add('note', t);
+  while (missedNotes.length) add('note', missedNotes.shift()); // results that arrived while you were on another tab
 
   async function send(text) {
     text = text.trim();
@@ -683,10 +704,21 @@ async function loadDevices() {
 
 function renderRecent(cmds) {
   if (!recentBox) return;
-  recentBox.replaceChildren(...(cmds.length ? cmds.slice(0, 8).map((c) => h('div', { class: 'item' },
-    h('div', { class: 'grow' }, h('div', { class: 'mono' }, describe(c)),
-      c.result ? h('div', { class: 'muted' }, c.result) : null),
-    h('span', { class: 'tag' }, c.status))) : [h('p', { class: 'muted' }, 'Abhi koi action nahi.')]));
+  if (recentBox.querySelector('details[open]')) return; // don't collapse an answer you are reading
+  recentBox.replaceChildren(...(cmds.length ? cmds.slice(0, 8).map((c) => {
+    const body = h('div', { class: 'result-full muted' }, c.result || '');
+    const full = c.result_len > 1500;
+    return h('div', { class: 'item' },
+      h('div', { class: 'grow' }, h('div', { class: 'mono' }, describe(c)),
+        c.result ? (c.action.startsWith('claude_')
+          ? h('details', { ontoggle: async (e) => {
+            if (e.target.open && full) {
+              try { body.textContent = (await api('command_result&id=' + c.id)).result; } catch (x) { body.textContent = x.message; }
+            }
+          } }, h('summary', null, 'Jawab dekho'), body)
+          : h('div', { class: 'muted' }, c.result)) : null),
+      h('span', { class: 'tag' }, c.status));
+  }) : [h('p', { class: 'muted' }, 'Abhi koi action nahi.')]));
 }
 
 // ---------- boot ----------
