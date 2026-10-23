@@ -4,6 +4,7 @@ declare(strict_types=1);
 require __DIR__ . '/lib/db.php';
 require __DIR__ . '/lib/auth.php';
 require __DIR__ . '/lib/tools.php';
+require __DIR__ . '/lib/whatsapp.php';
 require __DIR__ . '/lib/claude.php';
 
 if (cfg('require_https') && !is_https()) {
@@ -203,7 +204,17 @@ switch ($route) {
             $r['args'] = json_decode($r['args'], true) ?: new stdClass();
             return $r;
         }, $st->fetchAll());
-        json_out(['commands' => $rows]);
+        $st = $pdo->prepare(
+            'SELECT id, channel, contact, body, status, result, created_at FROM messages_out
+             WHERE user_id = ? ORDER BY id DESC LIMIT 20'
+        );
+        $st->execute([$me['user_id']]);
+        json_out(['commands' => $rows, 'messages' => $st->fetchAll()]);
+
+    case 'message_decide':
+        $me = require_client();
+        [$ok, $msg] = decide_message((int) $me['user_id'], (int) ($in['id'] ?? 0), !empty($in['approve']));
+        json_out(['ok' => $ok, 'result' => $msg]);
 
     case 'command_decide':
         $me = require_client();

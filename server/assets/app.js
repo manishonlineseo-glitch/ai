@@ -119,8 +119,8 @@ function showApp() {
 async function tick() {
   if (document.hidden || !state) return;
   try {
-    const { commands } = await api('commands');
-    renderPending(commands);
+    const { commands, messages } = await api('commands');
+    renderPending(commands, messages);
     if (tab === 'devices') renderRecent(commands);
     if (tab === 'devices') loadDevices();
   } catch (x) { if (x.status === 401) boot(); }
@@ -132,20 +132,28 @@ function describe(c) {
   return c.action + (detail ? ' → ' + detail : '') + ' (' + c.device + ')';
 }
 
-function renderPending(cmds) {
+function renderPending(cmds, msgs) {
   const box = document.getElementById('pending');
   if (!box) return;
-  const waiting = cmds.filter((c) => c.status === 'awaiting_confirm');
-  box.replaceChildren(...waiting.map((c) => h('div', { class: 'card pending' },
-    h('div', { class: 'muted' }, 'Approval chahiye'),
-    h('div', { class: 'mono' }, describe(c)),
+  const card = (title, text, onDecide) => h('div', { class: 'card pending' },
+    h('div', { class: 'muted' }, title),
+    h('div', { class: 'mono', style: 'white-space:pre-wrap' }, text),
     h('div', { class: 'row', style: 'margin-top:8px' },
-      h('button', { class: 'small', onclick: () => decide(c.id, true) }, 'Approve'),
-      h('button', { class: 'small ghost', onclick: () => decide(c.id, false) }, 'Deny')))));
+      h('button', { class: 'small', onclick: () => onDecide(true) }, 'Approve'),
+      h('button', { class: 'small ghost', onclick: () => onDecide(false) }, 'Deny')));
+
+  box.replaceChildren(
+    ...cmds.filter((c) => c.status === 'awaiting_confirm')
+      .map((c) => card('PC action: approval chahiye', describe(c), (ok) => decide('command_decide', c.id, ok))),
+    ...(msgs || []).filter((m) => m.status === 'awaiting_confirm')
+      .map((m) => card('WhatsApp → ' + m.contact + ': approval chahiye', m.body, (ok) => decide('message_decide', m.id, ok))));
 }
 
-async function decide(id, approve) {
-  await api('command_decide', { id, approve });
+async function decide(route, id, approve) {
+  try {
+    const r = await api(route, { id, approve });
+    if (approve && r.result && route === 'message_decide') alert('WhatsApp: ' + r.result);
+  } catch (x) { alert(x.message); }
   tick();
 }
 

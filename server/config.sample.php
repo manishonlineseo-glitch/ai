@@ -18,4 +18,14 @@ return [
     'no_confirm_actions' => ['cpu_status', 'speak'],
 
     'chat_rate_per_min' => 20,
+
+    // WhatsApp Business Cloud API (official, from Meta). Leave empty to disable.
+    'whatsapp_token'    => '',
+    'whatsapp_phone_id' => '',
+    'whatsapp_api_base' => 'https://graph.facebook.com/v21.0',
+    // Only these contacts can ever be messaged. Name => number with country code, digits only.
+    // The AI sees the names, never the numbers, and can't message anyone else.
+    'whatsapp_contacts' => [
+        // 'mom' => '919812345678',
+    ],
 ];

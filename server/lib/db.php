@@ -77,6 +77,18 @@ function migrate(PDO $pdo): void
             updated_at INTEGER NOT NULL
         );
         CREATE INDEX IF NOT EXISTS idx_cmd_dev ON commands(device_id, status);
+        CREATE TABLE IF NOT EXISTS messages_out (
+            id INTEGER PRIMARY KEY,
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            channel TEXT NOT NULL,
+            contact TEXT NOT NULL,
+            recipient TEXT NOT NULL,
+            body TEXT NOT NULL,
+            status TEXT NOT NULL,
+            result TEXT,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL
+        );
         CREATE TABLE IF NOT EXISTS chat (
             id INTEGER PRIMARY KEY,
             user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,

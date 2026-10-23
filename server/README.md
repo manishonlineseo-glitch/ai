@@ -28,6 +28,16 @@ python agent.py
 ```
 Only actions in `allowed_actions` run, and `open_app` only runs apps listed in `apps`.
 
+## WhatsApp (official Cloud API)
+1. In Meta for Developers create a Business app, add WhatsApp, and note the **Phone number ID** and a
+   **permanent access token** (System User). This uses a business number, not your personal WhatsApp.
+2. Put `whatsapp_token`, `whatsapp_phone_id` and your allowed `whatsapp_contacts` in `config.php`.
+3. Say "Mom ko message karo: ..." in chat. The message waits in Pending; it is sent only when you tap Approve.
+- Meta only allows free text within 24 hours after the contact last wrote to you. Otherwise the send fails
+  with a clear error and you need an approved template (not built yet).
+- Personal WhatsApp automation (WhatsApp Web bots) is deliberately not supported: it breaks WhatsApp's rules
+  and can get the number banned.
+
 ## Safety model
 - API key lives only in `config.php` on the server.
 - Every device has its own token; block/delete kills it at once. Agent tokens can't use the browser API.

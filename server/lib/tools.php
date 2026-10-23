@@ -87,6 +87,15 @@ function claude_tools(): array
          'input_schema' => ['type' => 'object', 'properties' => new stdClass()]],
         ['name' => 'list_devices', 'description' => 'List the user\'s devices and whether each is online.',
          'input_schema' => ['type' => 'object', 'properties' => new stdClass()]],
+        ['name' => 'list_contacts', 'description' => 'List the contact names the user allowed for WhatsApp (no numbers).',
+         'input_schema' => ['type' => 'object', 'properties' => new stdClass()]],
+        ['name' => 'send_whatsapp',
+         'description' => 'Prepare a WhatsApp message to an allowed contact. It is NEVER sent until the user taps '
+            . 'Approve in the app, so tell them it is waiting for approval.',
+         'input_schema' => ['type' => 'object', 'properties' => [
+             'contact' => ['type' => 'string', 'description' => 'Contact name from list_contacts'],
+             'text'    => ['type' => 'string'],
+         ], 'required' => ['contact', 'text']]],
         ['name' => 'pc_command',
          'description' => 'Send an action to one of the user\'s PCs (a device with role agent). Risky actions are '
             . 'held until the user approves them in the app; say so instead of claiming they ran.',
@@ -150,6 +159,14 @@ function run_tool(string $name, array $in, int $userId): string
                         . ($d['blocked'] ? 'blocked' : (time() - (int) $d['last_seen'] < 30 ? 'online' : 'offline')) . ')',
                     $st->fetchAll()
                 ));
+
+            case 'list_contacts':
+                return implode(', ', array_keys(wa_contacts())) ?: 'No contacts configured.';
+
+            case 'send_whatsapp':
+                $id = queue_whatsapp($userId, (string) ($in['contact'] ?? ''), (string) ($in['text'] ?? ''));
+                return 'Message #' . $id . ' to ' . strtolower(trim((string) $in['contact']))
+                    . ' is prepared but NOT sent: the user must approve it in the app (Pending section).';
 
             case 'pc_command':
                 $q = queue_command($userId, (string) ($in['device'] ?? ''), (string) ($in['action'] ?? ''), $in);
