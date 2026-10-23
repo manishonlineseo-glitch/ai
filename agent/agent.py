@@ -26,7 +26,7 @@ CONFIG_PATH = os.path.join(HERE, "config.json")
 ENGINES = ("claude", "gemini", "codex")
 AI_ACTIONS = {f"{e}_{m}" for e in ENGINES for m in ("read", "work")}
 ALL_ACTIONS = {"cpu_status", "speak", "open_url", "open_app", "lock", "shutdown", "restart", "cancel_shutdown",
-               "brain_chat", "screen_look", "claude_sessions", "window_read"} | AI_ACTIONS
+               "brain_chat", "screen_look", "claude_sessions", "window_read", "web_research"} | AI_ACTIONS
 STATE_PATH = os.path.join(HERE, "state.json")
 
 # Headless AI coding CLIs. Override any key under "claude" / "gemini" / "codex" in config.json.
@@ -505,6 +505,36 @@ def screen_look(cfg, args):
                 os.remove(p)
 
 
+def web_research(cfg, args):
+    """Research a question on the live web with the owner's own Codex login. The AI runs in an empty folder with a read-only
+    sandbox: it can search and read pages but has no files, no shell and no secrets to leak."""
+    import tempfile
+    question = str(args.get("question") or "").strip()
+    if not question:
+        raise ValueError("question khali hai")
+    os.makedirs(BRAIN_DIR, exist_ok=True)
+    fd, out_file = tempfile.mkstemp(prefix="jarvis_research_", suffix=".txt")
+    os.close(fd)
+    try:
+        cmd = cli_executable(cfg, "codex") + ["--search", "exec", "-C", BRAIN_DIR, "-s", "read-only", "--skip-git-repo-check",
+                                              "-o", out_file, "-"]
+        proc = subprocess.Popen(cmd, cwd=BRAIN_DIR, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                text=True, encoding="utf-8", errors="replace")
+        try:
+            out, err = proc.communicate(question, timeout=cfg.get("research_timeout_seconds", 600))
+        except subprocess.TimeoutExpired:
+            kill_tree(proc)
+            raise TimeoutError("web research timeout")
+        with open(out_file, encoding="utf-8", errors="replace") as f:
+            text = f.read().strip()
+        if proc.returncode != 0 or not text:
+            raise RuntimeError((text or err.strip() or out.strip() or f"exit code {proc.returncode}")[:1500])
+        return text + "\n\n— web research · codex"
+    finally:
+        if os.path.exists(out_file):
+            os.remove(out_file)
+
+
 def run_ai(cfg, engine, mode, args):
     """Run an AI coding CLI headless in an allow-listed project folder and return its final answer."""
     project = str(args.get("project", ""))
@@ -559,6 +589,8 @@ def run_action(cfg, action, args):
         return claude_sessions(cfg, args)
     if action == "window_read":
         return window_read(cfg, args)
+    if action == "web_research":
+        return web_research(cfg, args)
     if action in AI_ACTIONS:
         engine, mode = action.split("_")
         return run_ai(cfg, engine, mode, args)
@@ -622,6 +654,15 @@ def main():
                 execute(q.get())
         return worker
 
+    def ticker():
+        while True:
+            time.sleep(60)
+            try:
+                s.get(base + "tick", timeout=170)  # the server may run a news summary or report during this call
+            except requests.RequestException:
+                pass
+
+    threading.Thread(target=ticker, daemon=True).start()
     threading.Thread(target=make_worker(ai_queue), daemon=True).start()
     threading.Thread(target=make_worker(brain_queue), daemon=True).start()
 
@@ -637,7 +678,7 @@ def main():
                 sys.exit("Server ne token reject kiya (block ya delete hua?). Agent band.")
             r.raise_for_status()
             for cmd in r.json().get("commands", []):
-                if cmd["action"] in AI_ACTIONS or cmd["action"] in ("brain_chat", "screen_look", "window_read", "claude_sessions"):
+                if cmd["action"] in AI_ACTIONS or cmd["action"] in ("brain_chat", "screen_look", "window_read", "claude_sessions", "web_research"):
                     try:
                         (brain_queue if cmd["action"] == "brain_chat" else ai_queue).put_nowait(cmd)
                     except queue.Full:

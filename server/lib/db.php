@@ -41,6 +41,17 @@ function migrate(PDO $pdo): void
             $pdo->exec("ALTER TABLE devices ADD COLUMN $col $type");
         }
     }
+    $haveTasks = array_column($pdo->query('PRAGMA table_info(tasks)')->fetchAll(), 'name');
+    foreach ([
+        'category' => 'TEXT NOT NULL DEFAULT "other"', 'status' => 'TEXT NOT NULL DEFAULT "todo"', 'details' => 'TEXT',
+        'assignee' => 'TEXT NOT NULL DEFAULT "me"', 'priority' => 'INTEGER NOT NULL DEFAULT 0', 'due' => 'TEXT',
+        'done_at' => 'INTEGER', 'updated_at' => 'INTEGER', 'run_state' => 'TEXT',
+    ] as $col => $type) {
+        if (!in_array($col, $haveTasks, true)) {
+            $pdo->exec("ALTER TABLE tasks ADD COLUMN $col $type");
+        }
+    }
+    $pdo->exec('UPDATE tasks SET status = "done" WHERE done = 1 AND status = "todo"');
     $haveCmd = array_column($pdo->query('PRAGMA table_info(commands)')->fetchAll(), 'name');
     if (!in_array('final', $haveCmd, true)) {
         $pdo->exec('ALTER TABLE commands ADD COLUMN final TEXT');
@@ -120,6 +131,36 @@ function migrate_tables(PDO $pdo): void
             name TEXT NOT NULL,
             type TEXT NOT NULL,
             created_at INTEGER NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS task_log (
+            id INTEGER PRIMARY KEY,
+            task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            author TEXT NOT NULL,
+            text TEXT NOT NULL,
+            created_at INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_tasklog ON task_log(task_id);
+        CREATE TABLE IF NOT EXISTS routines (
+            id INTEGER PRIMARY KEY,
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            kind TEXT NOT NULL,
+            title TEXT NOT NULL,
+            query TEXT NOT NULL DEFAULT "",
+            hhmm TEXT NOT NULL,
+            enabled INTEGER NOT NULL DEFAULT 1,
+            last_run_date TEXT
+        );
+        CREATE TABLE IF NOT EXISTS reports (
+            id INTEGER PRIMARY KEY,
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            kind TEXT NOT NULL,
+            body TEXT NOT NULL,
+            created_at INTEGER NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS kv (
+            k TEXT PRIMARY KEY,
+            v TEXT NOT NULL
         );
         CREATE TABLE IF NOT EXISTS skills (
             id INTEGER PRIMARY KEY,

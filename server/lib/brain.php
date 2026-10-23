@@ -93,9 +93,7 @@ function brain_prompt(int $userId, string $text, ?array $agent): string
         ];
     }
 
-    $q = $pdo->prepare('SELECT id, title FROM tasks WHERE user_id = ? AND done = 0 ORDER BY id DESC LIMIT 15');
-    $q->execute([$userId]);
-    $tasks = $q->fetchAll();
+    $board = task_snapshot($userId);
     $q = $pdo->prepare('SELECT id, body FROM notes WHERE user_id = ? ORDER BY id DESC LIMIT 8');
     $q->execute([$userId]);
     $notes = array_map(fn($n) => ['id' => $n['id'], 'body' => mb_substr($n['body'], 0, 200)], $q->fetchAll());
@@ -111,7 +109,7 @@ function brain_prompt(int $userId, string $text, ?array $agent): string
     $context = [
         'now'              => date('Y-m-d H:i (l)') . ' ' . date_default_timezone_get(),
         'devices'          => explode("\n", run_tool('list_devices', [], $userId)),
-        'open_tasks'       => $tasks,
+        'task_board'       => $board, // open tasks (id, category, status, assignee, last note) and what was finished today
         'recent_notes'     => $notes,
         'contacts'         => array_keys(wa_contacts()),
         'pc_agent'         => $agent ? $agent['name'] : null,
@@ -132,6 +130,9 @@ function brain_prompt(int $userId, string $text, ?array $agent): string
         . "- For \"call mom\", \"open WhatsApp\", \"play a song on YouTube\" use phone_action (the user taps the button it shows).\n"
         . "- Work on the PC: pc_command with device = pc_agent and action claude_read/gemini_read/codex_read (read-only) or *_work (may edit files; the user must tap to approve). "
         . "Engine = default_engine unless the user asks for a specific AI to do the work AND it is in engines_logged_in; a word like \"Claude\" may just name the app on the screen, so it does not change the engine. project must be one of pc_projects. Write complete, self-contained prompts. Answers arrive in chat later, so just say it was started.\n"
+        . "- Tasks: add_task (category development/marketing/research/news/social/other; assignee jarvis = Jarvis does the work: news summary, web research, post drafts, a plan; assignee me = the user's own). "
+        . "For \"aaj ka kya task hai / kya complete hua\" answer from task_board. Use update_task to change status or add a note, run_task to hand an existing task to Jarvis. "
+        . "Never claim posting/sending happened: social tasks only produce drafts for the user.\n"
         . "- To read what is WRITTEN in a window without a screenshot (\"jo likha hai copy karke samjhao\", \"screenshot nahi, text padho\") use pc_command action window_read "
         . "(device = pc_agent, window = part of the window title, e.g. \"Claude\", or empty for the front window; question = what to find out). It copies the window's text and the AI explains it; exact and fast. "
         . "For Claude Code progress specifically claude_sessions is even more exact; use screen_look only for things that are not text (images, layout).\n"

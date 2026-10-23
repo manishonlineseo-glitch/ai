@@ -74,3 +74,29 @@ function openai_generate(string $prompt): string
     }
     throw new RuntimeException('OpenAI: ' . mb_substr($model . ': ' . llm_error_text($j, $code, $err), 0, 200));
 }
+
+/** Plain-text Gemini answer (no JSON mode). Tries each configured model like gemini_generate(). */
+function gemini_text(string $prompt, int $timeout = 40): string
+{
+    $key = (string) cfg('gemini_api_key');
+    if ($key === '') {
+        throw new RuntimeException('gemini_api_key set nahi hai');
+    }
+    $models = cfg('gemini_models');
+    $models = is_array($models) && $models ? $models : ['gemini-3.5-flash', 'gemini-3.1-flash-lite'];
+    $last = '';
+    foreach ($models as $m) {
+        [$code, $j, $err] = llm_http(
+            'https://generativelanguage.googleapis.com/v1beta/models/' . rawurlencode((string) $m) . ':generateContent',
+            ['x-goog-api-key: ' . $key],
+            ['contents' => [['role' => 'user', 'parts' => [['text' => $prompt]]]], 'generationConfig' => ['temperature' => 0.4]],
+            $timeout
+        );
+        $text = trim((string) ($j['candidates'][0]['content']['parts'][0]['text'] ?? ''));
+        if ($code === 200 && $text !== '') {
+            return $text;
+        }
+        $last = $m . ': ' . llm_error_text($j, $code, $err);
+    }
+    throw new RuntimeException('Gemini: ' . mb_substr($last, 0, 200));
+}

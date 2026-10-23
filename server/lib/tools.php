@@ -5,7 +5,7 @@ const AI_ENGINES = ['claude', 'gemini', 'codex'];
 const PC_ACTIONS = [
     'cpu_status', 'speak', 'open_url', 'open_app', 'lock', 'shutdown', 'restart', 'cancel_shutdown',
     'claude_read', 'claude_work', 'gemini_read', 'gemini_work', 'codex_read', 'codex_work',
-    'screen_look', 'claude_sessions', 'window_read',
+    'screen_look', 'claude_sessions', 'window_read', 'web_research',
 ];
 
 /** Small, reversible things run on their own; anything that edits files or powers off a PC waits for a tap. */
@@ -14,6 +14,7 @@ const DEFAULT_AUTO_ACTIONS = [
     'screen_look', // the owner chose "no approval": the screenshot goes to their own AI login and is never stored
     'claude_sessions', // reads the laptop's own Claude Code session records, no AI involved
     'window_read', // copies a window's text (no screenshot) and has the owner's own AI explain it
+    'web_research', // read-only: a web-searching AI in an empty folder, no files or shell
 ];
 const DEFAULT_AUTO_URL_DOMAINS = [
     'youtube.com', 'google.com', 'wa.me', 'whatsapp.com', 'github.com', 'claude.ai', 'chatgpt.com', 'gemini.google.com',
@@ -44,7 +45,7 @@ function is_ai_action(string $action): bool
 /** Actions that take a while and whose answer is announced in chat when done. */
 function is_long_action(string $action): bool
 {
-    return is_ai_action($action) || in_array($action, ['screen_look', 'claude_sessions', 'window_read', 'cpu_status'], true);
+    return is_ai_action($action) || in_array($action, ['screen_look', 'claude_sessions', 'window_read', 'cpu_status', 'web_research'], true);
 }
 
 function needs_approval(string $action, array $args): bool
@@ -105,6 +106,12 @@ function clean_pc_args(string $action, array $in): array
                 throw new InvalidArgumentException('prompt 1-4000 akshar ka chahiye');
             }
             return ['project' => $project, 'prompt' => $prompt, 'continue' => !empty($in['continue'])];
+        case 'web_research':
+            $question = trim((string) ($in['question'] ?? ''));
+            if ($question === '' || mb_strlen($question) > 4000) {
+                throw new InvalidArgumentException('question 1-4000 akshar ka chahiye');
+            }
+            return ['question' => $question, 'engine' => 'codex', 'task_id' => (int) ($in['task_id'] ?? 0)];
         case 'claude_sessions':
             return ['hours' => min(max((int) ($in['hours'] ?? 24), 1), 168)];
         case 'screen_look':
@@ -244,9 +251,21 @@ function claude_tools(): array
              'text'    => ['type' => 'string', 'description' => 'Optional pre-filled WhatsApp text'],
              'query'   => ['type' => 'string', 'description' => 'For youtube_search / maps_search'],
          ], 'required' => ['action']]],
-        ['name' => 'add_task', 'description' => 'Add a to-do task for the user.',
-         'input_schema' => ['type' => 'object', 'properties' => ['title' => ['type' => 'string']], 'required' => ['title']]],
-        ['name' => 'list_tasks', 'description' => 'List the user\'s tasks (open ones by default).',
+        ['name' => 'add_task', 'description' => 'Add a task to the board. category: development, marketing, research, news, social or other. '
+            . 'assignee "jarvis" means Jarvis does the work itself (news summary, web research, post drafts, a plan); "me" is for the user. '
+            . 'Put the full brief in details.',
+         'input_schema' => ['type' => 'object', 'properties' => [
+             'title' => ['type' => 'string'], 'category' => ['type' => 'string', 'enum' => TASK_CATEGORIES],
+             'details' => ['type' => 'string'], 'assignee' => ['type' => 'string', 'enum' => ['me', 'jarvis']],
+             'due' => ['type' => 'string', 'description' => 'YYYY-MM-DD, optional'],
+         ], 'required' => ['title']]],
+        ['name' => 'update_task', 'description' => 'Change a task: set status (todo, doing, review, done) and/or add a note to its log.',
+         'input_schema' => ['type' => 'object', 'properties' => [
+             'id' => ['type' => 'integer'], 'status' => ['type' => 'string', 'enum' => TASK_STATUSES], 'note' => ['type' => 'string'],
+         ], 'required' => ['id']]],
+        ['name' => 'run_task', 'description' => 'Give an existing task to Jarvis to work on now (news, research, drafts, plan). The result is written to the task and appears in chat.',
+         'input_schema' => ['type' => 'object', 'properties' => ['id' => ['type' => 'integer']], 'required' => ['id']]],
+        ['name' => 'list_tasks', 'description' => 'List the user\'s open tasks with category and status (done ones too if asked).',
          'input_schema' => ['type' => 'object', 'properties' => ['include_done' => ['type' => 'boolean']]]],
         ['name' => 'complete_task', 'description' => 'Mark a task done by its id.',
          'input_schema' => ['type' => 'object', 'properties' => ['id' => ['type' => 'integer']], 'required' => ['id']]],
@@ -274,6 +293,7 @@ function claude_tools(): array
              'url'    => ['type' => 'string', 'description' => 'For open_url'],
              'app'    => ['type' => 'string', 'description' => 'For open_app: a name from the agent\'s allowlist'],
              'text'   => ['type' => 'string', 'description' => 'For speak'],
+             'question' => ['type' => 'string', 'description' => 'For web_research: what to research on the web (also for screen_look: what to find out)'],
              'hours'    => ['type' => 'integer', 'description' => 'For claude_sessions: how many past hours to include (default 24)'],
              'question' => ['type' => 'string', 'description' => 'For screen_look: what to find out from the screenshot (optional)'],
              'window'   => ['type' => 'string', 'description' => 'For screen_look/window_read: part of a window title (e.g. "Claude") to bring to the front before the screenshot (optional)'],
@@ -291,27 +311,41 @@ function run_tool(string $name, array $in, int $userId): string
     try {
         switch ($name) {
             case 'add_task':
-                $t = trim((string) ($in['title'] ?? ''));
-                if ($t === '' || mb_strlen($t) > 200) {
-                    return 'Error: title 1-200 akshar ka chahiye';
+                try {
+                    $id = task_add($userId, (string) ($in['title'] ?? ''), (string) ($in['category'] ?? 'other'), (string) ($in['details'] ?? ''),
+                        (string) ($in['assignee'] ?? 'me'), isset($in['due']) ? (string) $in['due'] : null);
+                } catch (InvalidArgumentException $e) {
+                    return 'Error: ' . $e->getMessage();
                 }
-                $pdo->prepare('INSERT INTO tasks (user_id, title, created_at) VALUES (?,?,?)')->execute([$userId, $t, time()]);
-                return 'Task added with id ' . $pdo->lastInsertId();
+                return 'Task added with id ' . $id . (($in['assignee'] ?? '') === 'jarvis' ? '; Jarvis will work on it within a minute and post the result in chat.' : '.');
+
+            case 'update_task':
+                $tid = (int) ($in['id'] ?? 0);
+                if (!task_get($userId, $tid)) {
+                    return 'Error: us id ka task nahi mila';
+                }
+                if (!empty($in['status']) && !task_set_status($userId, $tid, (string) $in['status'])) {
+                    return 'Error: status todo/doing/review/done me se ek ho';
+                }
+                if (!empty($in['note'])) {
+                    task_log($tid, $userId, 'jarvis', mb_substr((string) $in['note'], 0, 1000));
+                }
+                return 'Task updated.';
+
+            case 'run_task':
+                return task_give_to_jarvis($userId, (int) ($in['id'] ?? 0))
+                    ? 'Task handed to Jarvis; it starts within a minute and the result appears in chat.'
+                    : 'Error: us id ka task nahi mila';
 
             case 'list_tasks':
-                $sql = 'SELECT id, title, done FROM tasks WHERE user_id = ?' . (empty($in['include_done']) ? ' AND done = 0' : '') . ' ORDER BY id DESC LIMIT 50';
+                $sql = 'SELECT id, title, category, status, assignee FROM tasks WHERE user_id = ?' . (empty($in['include_done']) ? ' AND status <> "done"' : '') . ' ORDER BY id DESC LIMIT 50';
                 $st = $pdo->prepare($sql);
                 $st->execute([$userId]);
                 $rows = $st->fetchAll();
-                if (!$rows) {
-                    return 'No tasks.';
-                }
-                return implode("\n", array_map(fn($r) => '#' . $r['id'] . ($r['done'] ? ' [done] ' : ' [open] ') . $r['title'], $rows));
+                return $rows ? implode("\n", array_map(fn($r) => '#' . $r['id'] . ' [' . $r['category'] . '/' . $r['status'] . ($r['assignee'] === 'jarvis' ? '/jarvis' : '') . '] ' . $r['title'], $rows)) : 'No tasks.';
 
             case 'complete_task':
-                $st = $pdo->prepare('UPDATE tasks SET done = 1 WHERE id = ? AND user_id = ?');
-                $st->execute([(int) ($in['id'] ?? 0), $userId]);
-                return $st->rowCount() ? 'Done.' : 'Error: us id ka task nahi mila';
+                return task_set_status($userId, (int) ($in['id'] ?? 0), 'done') ? 'Done.' : 'Error: us id ka task nahi mila';
 
             case 'add_note':
                 $b = trim((string) ($in['body'] ?? ''));

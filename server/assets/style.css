@@ -175,6 +175,12 @@ button.danger { color: var(--danger); border-color: var(--danger); }
   .hud-card { scroll-snap-align: start; max-height: 30vh; overflow-y: auto; }
 }
 
+.task-item { align-items: flex-start; }
+.task-title { cursor: pointer; font-weight: 600; }
+.task-item select { width: auto; margin: 0; padding: 6px 8px; font-size: .85rem; }
+.task-detail { background: var(--bg); border: 1px solid var(--line); border-radius: 12px; padding: 10px; margin: 0 0 10px; }
+.log-row { margin-bottom: 8px; }
+.tag.accent { color: var(--accent); border-color: var(--accent); }
 .kv-big { display: grid; gap: 6px; margin-bottom: 10px; }
 .kv-big b { font-size: 1.4rem; margin-right: 4px; }
 .result-full { white-space: pre-wrap; max-height: 50vh; overflow-y: auto; margin-top: 6px; }

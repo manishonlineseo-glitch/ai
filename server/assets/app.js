@@ -198,11 +198,18 @@ function showAuth(setup) {
 let state = null;
 let tab = 'chat';
 let timer = null;
+let kicking = false;
+/** Ask the server to run whatever is due (reports, routines, tasks given to Jarvis). Fire and forget, one at a time. */
+function kickScheduler() {
+  if (kicking) return;
+  kicking = true;
+  api('tick').catch(() => {}).finally(() => { kicking = false; });
+}
 let pendingList = [];
 const announced = new Set();
 let noteHook = null;
 
-const TABS = [['chat', 'Chat'], ['tasks', 'Tasks'], ['notes', 'Notes'], ['devices', 'Devices'], ['skills', 'Seekha']];
+const TABS = [['chat', 'Chat'], ['tasks', 'Tasks'], ['report', 'Report'], ['notes', 'Notes'], ['devices', 'Devices'], ['skills', 'Seekha']];
 
 function note(text) {
   if (noteHook) noteHook(text);
@@ -236,6 +243,8 @@ function showApp() {
   renderView();
   clearInterval(timer);
   timer = setInterval(tick, 4000);
+  setInterval(kickScheduler, 60000);
+  setTimeout(kickScheduler, 3000);
 }
 
 function closeSide() {
@@ -246,12 +255,13 @@ function closeSide() {
 function renderView() {
   noteHook = null;
   hud = null;
+  refreshTasks = null;
   devicesBox = recentBox = null;
   document.querySelectorAll('.nav').forEach((b) => b.setAttribute('aria-current', b.dataset.tab === tab ? 'page' : 'false'));
   document.getElementById('title').textContent = TABS.find(([id]) => id === tab)[1];
   const view = document.getElementById('view');
   view.replaceChildren();
-  ({ chat: viewChat, tasks: viewTasks, notes: viewNotes, devices: viewDevices, skills: viewSkills })[tab](view);
+  ({ chat: viewChat, tasks: viewTasks, report: viewReport, notes: viewNotes, devices: viewDevices, skills: viewSkills })[tab](view);
   tick();
 }
 
@@ -269,6 +279,7 @@ async function tick() {
     announceFinished(commands);
     refreshHud();
     if (tab === 'devices') { renderRecent(commands); loadDevices(); }
+    if (tab === 'tasks' && refreshTasks) refreshTasks();
   } catch (x) { if (x.status === 401) boot(); }
 }
 
@@ -413,7 +424,8 @@ function buildHud(actions) {
       s.tasks.length
         ? h('ul', { class: 'hud-list' }, s.tasks.map((t) => h('li', null,
           h('input', { type: 'checkbox', class: 'check', 'aria-label': 'Done: ' + t.title, onchange: async () => { await api('task_toggle', { id: t.id, done: true }); refreshHud(); } }),
-          h('span', { class: 'grow' }, t.title))))
+          h('span', { class: 'grow' }, t.title),
+          t.assignee === 'jarvis' ? h('span', { class: 'tag' }, 'Jarvis') : null)))
         : h('p', { class: 'muted' }, 'Koi open task nahi.'));
 
     const core = hudCard('AI CORE', s.pending ? s.pending + ' PENDING' : 'STANDBY',
@@ -490,6 +502,7 @@ function viewChat(view) {
       }
       scroll.scrollTop = scroll.scrollHeight;
       speak(reply);
+      kickScheduler();
       tick();
     } catch (x) {
       wait.remove();
@@ -583,15 +596,151 @@ function simpleList(view, cfg) {
   load().catch((x) => { err.textContent = x.message; });
 }
 
+let refreshTasks = null; // set while the Tasks tab is open so the 4 second poll can refresh it
+const CAT_EMOJI_FREE = ''; // categories are plain words on purpose: no icons to maintain
+
+function fmtTime(ts) {
+  return new Date(ts * 1000).toLocaleString([], { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+}
+
 function viewTasks(view) {
-  simpleList(view, {
-    route: 'tasks', addRoute: 'task_add', field: 'title', placeholder: 'Naya task', max: 200,
-    render: (reload) => (t) => h('div', { class: 'item' + (t.done ? ' done' : '') },
-      h('input', { type: 'checkbox', class: 'check', checked: !!t.done, 'aria-label': 'Done',
-        onchange: async (e) => { await api('task_toggle', { id: t.id, done: e.target.checked }); reload(); } }),
-      h('div', { class: 'grow' }, t.title),
-      h('button', { class: 'ghost small', onclick: async () => { await api('task_delete', { id: t.id }); reload(); } }, 'Delete')),
-  });
+  const filters = { cat: '', status: '' };
+  let meta = { categories: {}, statuses: {} };
+  const open = new Set();
+  const list = h('div');
+  const err = h('div', { class: 'error', role: 'alert' });
+
+  const title = h('input', { placeholder: 'Kaam ka naam', maxlength: 200, 'aria-label': 'Kaam ka naam', required: true });
+  const cat = h('select', { 'aria-label': 'Category' });
+  const who = h('select', { 'aria-label': 'Kaun karega' },
+    h('option', { value: 'me' }, 'Main khud karunga'), h('option', { value: 'jarvis' }, 'Jarvis kare'));
+  const details = h('textarea', { placeholder: 'Details (optional): Jarvis ko kya chahiye, kaun si site/topic, kitna', rows: 2, maxlength: 4000, 'aria-label': 'Details' });
+  const due = h('input', { type: 'date', 'aria-label': 'Due date' });
+  const fCat = h('select', { 'aria-label': 'Category filter', onchange: (e) => { filters.cat = e.target.value; load(); } });
+  const fStatus = h('select', { 'aria-label': 'Status filter', onchange: (e) => { filters.status = e.target.value; load(); } });
+
+  function badge(text, cls) { return h('span', { class: 'tag' + (cls ? ' ' + cls : '') }, text); }
+
+  async function detailBox(task) {
+    const box = h('div', { class: 'task-detail' }, h('p', { class: 'muted' }, 'Load ho raha hai...'));
+    try {
+      const d = await api('task_detail&id=' + task.id);
+      const note = h('input', { placeholder: 'Is kaam par note likho', maxlength: 2000, 'aria-label': 'Note' });
+      box.replaceChildren(
+        d.task.details ? h('div', { class: 'result-full' }, d.task.details) : null,
+        h('div', null, d.log.map((l) => h('div', { class: 'log-row' },
+          h('span', { class: 'muted' }, fmtTime(l.created_at) + ' · ' + (l.author === 'jarvis' ? 'Jarvis' : 'Aap')),
+          h('div', { class: 'result-full' }, l.text)))),
+        h('form', { class: 'row', onsubmit: async (e) => {
+          e.preventDefault();
+          if (!note.value.trim()) return;
+          await api('task_note', { id: task.id, text: note.value });
+          load();
+        } }, note, h('button', { type: 'submit', class: 'small' }, 'Note')),
+        h('div', { class: 'row wrap', style: 'margin-top:8px' },
+          h('button', { class: 'small', type: 'button', onclick: async () => { await api('task_run', { id: task.id }); open.delete(task.id); load(); } }, 'Jarvis se abhi karwao'),
+          h('button', { class: 'ghost small danger', type: 'button', onclick: async () => {
+            if (confirm('Ye kaam delete karein?')) { await api('task_delete', { id: task.id }); load(); }
+          } }, 'Delete')));
+    } catch (x) { box.textContent = x.message; }
+    return box;
+  }
+
+  async function load() {
+    const data = await api('tasks');
+    meta = data;
+    if (!cat.options.length) {
+      Object.entries(data.categories).forEach(([k, v]) => cat.append(h('option', { value: k, selected: k === 'other' }, v)));
+      fCat.append(h('option', { value: '' }, 'Sab category'));
+      Object.entries(data.categories).forEach(([k, v]) => fCat.append(h('option', { value: k }, v)));
+      fStatus.append(h('option', { value: '' }, 'Sab status'));
+      Object.entries(data.statuses).forEach(([k, v]) => fStatus.append(h('option', { value: k }, v)));
+    }
+    const rows = data.tasks.filter((x) => (!filters.cat || x.category === filters.cat) && (!filters.status || x.status === filters.status));
+    const items = [];
+    for (const x of rows) {
+      const statusSel = h('select', { 'aria-label': 'Status', onchange: async (e) => { await api('task_status', { id: x.id, status: e.target.value }); load(); } },
+        Object.entries(data.statuses).map(([k, v]) => h('option', { value: k, selected: k === x.status }, v)));
+      const row = h('div', { class: 'item task-item' + (x.status === 'done' ? ' done' : '') },
+        h('div', { class: 'grow' },
+          h('div', { class: 'task-title', onclick: () => { open.has(x.id) ? open.delete(x.id) : open.add(x.id); load(); } }, x.title),
+          h('div', { class: 'row wrap', style: 'gap:6px;margin-top:4px' },
+            badge(data.categories[x.category] || x.category), badge(x.assignee === 'jarvis' ? 'Jarvis' : 'Aap', x.assignee === 'jarvis' ? 'accent' : ''),
+            x.run_state ? badge('Jarvis kaam kar raha hai...', 'accent') : null,
+            x.due ? badge('due ' + x.due) : null, x.notes > 1 ? badge(x.notes + ' notes') : null)),
+        statusSel);
+      items.push(row);
+      if (open.has(x.id)) items.push(await detailBox(x));
+    }
+    list.replaceChildren(...(items.length ? items : [h('p', { class: 'muted' }, 'Koi kaam nahi.')]));
+  }
+  refreshTasks = () => { if (!document.querySelector('.task-detail input:focus, .task-detail textarea:focus')) load().catch(() => {}); };
+
+  page(view,
+    h('form', { class: 'card', onsubmit: async (e) => {
+      e.preventDefault();
+      err.textContent = '';
+      try {
+        const r = await api('task_add', { title: title.value, category: cat.value, assignee: who.value, details: details.value, due: due.value });
+        if (/^Error/.test(r.result)) throw new Error(r.result);
+        title.value = ''; details.value = ''; due.value = '';
+        if (who.value === 'jarvis') kickScheduler();
+        load();
+      } catch (x) { err.textContent = x.message; }
+    } }, title, h('div', { class: 'row wrap' }, cat, who, due), details, err, h('button', { type: 'submit' }, 'Kaam jodo')),
+    h('div', { class: 'row wrap', style: 'margin:12px 0' }, fCat, fStatus),
+    h('div', { class: 'card' }, list));
+  load().catch((x) => { err.textContent = x.message; });
+}
+
+// ---------- report + routines ----------
+function viewReport(view) {
+  const reports = h('div');
+  const routines = h('div', { class: 'card' });
+  const err = h('div', { class: 'error', role: 'alert' });
+  const KIND = { report_morning: 'Subah ka plan', report_evening: 'Shaam ki report', news: 'Roz ki news', research: 'Roz ki research' };
+
+  const rKind = h('select', { 'aria-label': 'Routine ka type' }, Object.entries(KIND).map(([k, v]) => h('option', { value: k, selected: k === 'news' }, v)));
+  const rTitle = h('input', { placeholder: 'Naam, jaise "AI news"', maxlength: 120, 'aria-label': 'Routine ka naam', required: true });
+  const rQuery = h('input', { placeholder: 'Topic / kya dekhna hai (news/research ke liye)', maxlength: 500, 'aria-label': 'Topic' });
+  const rTime = h('input', { type: 'time', value: '07:30', required: true, 'aria-label': 'Samay' });
+
+  async function load() {
+    const [{ reports: rs }, { routines: ro }] = await Promise.all([api('reports'), api('routines')]);
+    reports.replaceChildren(...(rs.length ? rs.map((r, i) => h('details', { class: 'card', open: i === 0 },
+      h('summary', null, (r.kind === 'morning' ? 'Subah ka plan' : 'Shaam ki report') + ' · ' + fmtTime(r.created_at)),
+      h('div', { class: 'result-full' }, r.body))) : [h('p', { class: 'muted' }, 'Abhi koi report nahi bani. Neeche button se banao, ya routine ka samay aane par apne aap banegi.')]));
+    routines.replaceChildren(...ro.map((r) => h('div', { class: 'item' },
+      h('div', { class: 'grow' },
+        h('div', null, r.title, ' ', badge2(KIND[r.kind] || r.kind)),
+        h('div', { class: 'muted' }, 'Roz ' + r.hhmm + (r.query ? ' · ' + r.query : '') + (r.last_run_date ? ' · aakhri baar ' + r.last_run_date : ''))),
+      h('button', { class: 'ghost small', onclick: async () => {
+        await api('routine_save', { id: r.id, kind: r.kind, title: r.title, query: r.query, hhmm: r.hhmm, enabled: !r.enabled }); load();
+      } }, r.enabled ? 'Band karo' : 'Chalu karo'),
+      h('button', { class: 'ghost small danger', onclick: async () => { await api('routine_delete', { id: r.id }); load(); } }, 'Delete'))));
+  }
+  const badge2 = (text) => h('span', { class: 'tag' }, text);
+  const make = (kind, label) => h('button', { class: 'small', type: 'button', onclick: async (e) => {
+    e.currentTarget.disabled = true;
+    try { await api('report_now', { kind }); await load(); } catch (x) { err.textContent = x.message; }
+    e.currentTarget.disabled = false;
+  } }, label);
+
+  page(view,
+    h('p', { class: 'muted' }, 'Jarvis subah plan aur shaam ko report banata hai: aaj kya hua, kya baaki hai, kya aapko dekhna hai. Roz ke routines Jarvis ko apne aap kaam dete hain. Ye tab chalte hain jab laptop agent chal raha ho ya ye app khula ho.'),
+    h('div', { class: 'row wrap' }, make('morning', 'Subah ka plan abhi banao'), make('evening', 'Shaam ki report abhi banao')),
+    h('h2', null, 'Reports'), reports,
+    h('h2', null, 'Roz ke routines'), routines,
+    h('form', { class: 'card', onsubmit: async (e) => {
+      e.preventDefault();
+      err.textContent = '';
+      try {
+        await api('routine_save', { kind: rKind.value, title: rTitle.value, query: rQuery.value, hhmm: rTime.value, enabled: true });
+        rTitle.value = ''; rQuery.value = '';
+        load();
+      } catch (x) { err.textContent = x.message; }
+    } }, h('div', { class: 'muted' }, 'Naya routine'), h('div', { class: 'row wrap' }, rKind, rTime), rTitle, rQuery, err, h('button', { type: 'submit' }, 'Routine jodo')));
+  load().catch((x) => { err.textContent = x.message; });
 }
 
 function viewNotes(view) {

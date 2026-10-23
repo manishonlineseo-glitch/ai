@@ -64,6 +64,19 @@ Each chat message goes to the first brain in `'brain_order'` that works; the oth
 The brain only returns a JSON plan; the server runs the tools with the usual approval rules. Note that tasks, notes and device
 names are part of the prompt, so they go to whichever provider answers (free API tiers may use data to improve the provider's products).
 
+## Task board and "employee" mode (Tasks and Report tabs)
+Tasks have a category (development, marketing, research, news, social, other), a status (baaki, chal raha hai, dekhna baaki, ho gaya),
+details, a log of notes, and an owner: you or **Jarvis**. Give Jarvis a task (form, "Jarvis se abhi karwao", or by voice/chat:
+*"Jarvis ek research task do: ..., tum khud karna"*) and the scheduler picks it up within a minute:
+- **news**: free Google News RSS headlines, summarised by Gemini with sources. Works with the laptop off.
+- **research / marketing**: runs on the laptop with the owner's Codex login and live web search, in an empty folder with a read-only
+  sandbox (no files, no shell). Waits until the laptop is online.
+- **social**: writes 3 post drafts and stops at "dekhna baaki". Jarvis never posts anything by itself.
+- **development / other**: a plan or an answer from Gemini (no code is run; code changes still go through `*_work` with your tap).
+Results are written into the task log and announced in chat. **Report** tab: morning plan (08:00) and evening report (20:00) are made
+automatically (what finished today, what is pending, what needs your review); add daily routines such as "7:30 AI news".
+The scheduler runs when the PC agent is running or the web app is open (each calls `tick` about once a minute); a real cron on a VPS is better later.
+
 ## Jarvis learns (so the AI teacher is needed less and less)
 Every command goes through `lib/skills.php` first. If Jarvis already learned that kind of sentence it answers instantly with no AI call;
 otherwise the teacher (Gemini/OpenAI/laptop AI) makes the plan, the plan is logged, and when the same sentence produced the same plan

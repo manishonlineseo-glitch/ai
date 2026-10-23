@@ -7,6 +7,7 @@ require __DIR__ . '/lib/tools.php';
 require __DIR__ . '/lib/whatsapp.php';
 require __DIR__ . '/lib/llm.php';
 require __DIR__ . '/lib/skills.php';
+require __DIR__ . '/lib/tasks.php';
 require __DIR__ . '/lib/brain.php';
 require __DIR__ . '/lib/claude.php';
 
@@ -217,9 +218,9 @@ switch ($route) {
                 ];
             }
         }
-        $tasks = $pdo->prepare('SELECT id, title FROM tasks WHERE user_id = ? AND done = 0 ORDER BY id DESC LIMIT 5');
+        $tasks = $pdo->prepare('SELECT id, title, category, status, assignee FROM tasks WHERE user_id = ? AND status <> "done" ORDER BY CASE status WHEN "doing" THEN 0 WHEN "review" THEN 1 ELSE 2 END, id DESC LIMIT 5');
         $tasks->execute([$uid]);
-        $open = $pdo->prepare('SELECT COUNT(*) FROM tasks WHERE user_id = ? AND done = 0');
+        $open = $pdo->prepare('SELECT COUNT(*) FROM tasks WHERE user_id = ? AND status <> "done"');
         $open->execute([$uid]);
         $pend = $pdo->prepare(
             'SELECT (SELECT COUNT(*) FROM commands WHERE user_id = :u AND status = "awaiting_confirm")
@@ -352,24 +353,107 @@ switch ($route) {
     // ---------- tasks & notes ----------
     case 'tasks':
         $me = require_client();
-        $st = $pdo->prepare('SELECT id, title, done FROM tasks WHERE user_id = ? ORDER BY done, id DESC LIMIT 200');
+        $st = $pdo->prepare(
+            'SELECT id, title, category, status, assignee, due, details, done, created_at, done_at, run_state,
+                    (SELECT COUNT(*) FROM task_log l WHERE l.task_id = tasks.id) AS notes
+             FROM tasks WHERE user_id = ? ORDER BY CASE status WHEN "doing" THEN 0 WHEN "review" THEN 1 WHEN "todo" THEN 2 ELSE 3 END, id DESC LIMIT 300'
+        );
         $st->execute([$me['user_id']]);
-        json_out(['tasks' => $st->fetchAll()]);
+        json_out(['tasks' => $st->fetchAll(), 'categories' => CATEGORY_LABEL, 'statuses' => STATUS_LABEL]);
 
     case 'task_add':
         $me = require_client();
-        json_out(['result' => run_tool('add_task', ['title' => $in['title'] ?? ''], (int) $me['user_id'])]);
+        try {
+            $id = task_add((int) $me['user_id'], (string) ($in['title'] ?? ''), (string) ($in['category'] ?? 'other'),
+                (string) ($in['details'] ?? ''), (string) ($in['assignee'] ?? 'me'), ($in['due'] ?? '') !== '' ? (string) $in['due'] : null);
+        } catch (InvalidArgumentException $e) {
+            json_out(['result' => 'Error: ' . $e->getMessage()]);
+        }
+        json_out(['result' => 'Task added with id ' . $id, 'id' => $id]);
 
-    case 'task_toggle':
+    case 'task_status':
         $me = require_client();
-        $pdo->prepare('UPDATE tasks SET done = ? WHERE id = ? AND user_id = ?')
-            ->execute([empty($in['done']) ? 0 : 1, (int) ($in['id'] ?? 0), $me['user_id']]);
+        json_out(['ok' => task_set_status((int) $me['user_id'], (int) ($in['id'] ?? 0), (string) ($in['status'] ?? ''))]);
+
+    case 'task_toggle': // checkbox in the Command Center
+        $me = require_client();
+        json_out(['ok' => task_set_status((int) $me['user_id'], (int) ($in['id'] ?? 0), empty($in['done']) ? 'todo' : 'done')]);
+
+    case 'task_note':
+        $me = require_client();
+        $text = trim((string) ($in['text'] ?? ''));
+        if ($text === '' || !task_get((int) $me['user_id'], (int) ($in['id'] ?? 0))) {
+            fail('Note khali hai ya task nahi mila');
+        }
+        task_log((int) $in['id'], (int) $me['user_id'], 'user', mb_substr($text, 0, 2000));
         json_out(['ok' => true]);
+
+    case 'task_run':
+        $me = require_client();
+        json_out(['ok' => task_give_to_jarvis((int) $me['user_id'], (int) ($in['id'] ?? 0))]);
+
+    case 'task_detail':
+        $me = require_client();
+        $task = task_get((int) $me['user_id'], (int) ($_GET['id'] ?? 0));
+        if (!$task) {
+            fail('Nahi mila', 404);
+        }
+        $st = $pdo->prepare('SELECT author, text, created_at FROM task_log WHERE task_id = ? ORDER BY id');
+        $st->execute([$task['id']]);
+        json_out(['task' => $task, 'log' => $st->fetchAll()]);
 
     case 'task_delete':
         $me = require_client();
         $pdo->prepare('DELETE FROM tasks WHERE id = ? AND user_id = ?')->execute([(int) ($in['id'] ?? 0), $me['user_id']]);
         json_out(['ok' => true]);
+
+    // ---------- reports, routines, scheduler ----------
+    case 'reports':
+        $me = require_client();
+        $st = $pdo->prepare('SELECT id, kind, body, created_at FROM reports WHERE user_id = ? ORDER BY id DESC LIMIT 12');
+        $st->execute([$me['user_id']]);
+        json_out(['reports' => $st->fetchAll()]);
+
+    case 'report_now':
+        $me = require_client();
+        $kind = ($in['kind'] ?? '') === 'morning' ? 'morning' : 'evening';
+        json_out(['body' => report_build((int) $me['user_id'], $kind)]);
+
+    case 'routines':
+        $me = require_client();
+        routines_seed((int) $me['user_id']);
+        $st = $pdo->prepare('SELECT id, kind, title, query, hhmm, enabled, last_run_date FROM routines WHERE user_id = ? ORDER BY hhmm, id');
+        $st->execute([$me['user_id']]);
+        json_out(['routines' => $st->fetchAll()]);
+
+    case 'routine_save':
+        $me = require_client();
+        $kind = (string) ($in['kind'] ?? '');
+        $hhmm = (string) ($in['hhmm'] ?? '');
+        $title = trim((string) ($in['title'] ?? ''));
+        if (!in_array($kind, ['report_morning', 'report_evening', 'news', 'research'], true) || !preg_match('/^([01]\d|2[0-3]):[0-5]\d$/', $hhmm) || $title === '' || mb_strlen($title) > 120) {
+            fail('Routine ka type, samay (HH:MM) aur naam sahi daalo');
+        }
+        $query = mb_substr(trim((string) ($in['query'] ?? '')), 0, 500);
+        if (!empty($in['id'])) {
+            $pdo->prepare('UPDATE routines SET kind = ?, title = ?, query = ?, hhmm = ?, enabled = ? WHERE id = ? AND user_id = ?')
+                ->execute([$kind, $title, $query, $hhmm, empty($in['enabled']) ? 0 : 1, (int) $in['id'], $me['user_id']]);
+        } else {
+            $pdo->prepare('INSERT INTO routines (user_id, kind, title, query, hhmm, enabled) VALUES (?,?,?,?,?,1)')
+                ->execute([$me['user_id'], $kind, $title, $query, $hhmm]);
+        }
+        json_out(['ok' => true]);
+
+    case 'routine_delete':
+        $me = require_client();
+        $pdo->prepare('DELETE FROM routines WHERE id = ? AND user_id = ?')->execute([(int) ($in['id'] ?? 0), $me['user_id']]);
+        json_out(['ok' => true]);
+
+    case 'tick': // called about once a minute by the open web page and by the PC agent; does the due work
+        if (!current_device()) {
+            fail('Login karo', 401);
+        }
+        json_out(scheduler_run());
 
     case 'notes':
         $me = require_client();
@@ -524,6 +608,9 @@ switch ($route) {
         ]);
         if ($st->rowCount() > 0 && $action === 'brain_chat') {
             finalize_brain((int) $in['id']); // run the planned tools and store the answer for the phone
+        }
+        if ($st->rowCount() > 0 && $action === 'web_research') {
+            task_apply_result((int) $in['id']); // write the findings into the task that asked for them
         }
         json_out(['ok' => $st->rowCount() > 0]);
 

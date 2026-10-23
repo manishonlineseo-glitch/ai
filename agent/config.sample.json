@@ -24,7 +24,8 @@
     "codex_read",
     "screen_look",
     "claude_sessions",
-    "window_read"
+    "window_read",
+    "web_research"
   ],
   "ai_timeout_minutes": 30
 }
