@@ -1,4 +1,6 @@
 Options -Indexes
+# Never serve a leftover git repo or dotfiles
+RedirectMatch 404 /\.git
 DirectoryIndex index.html
 
 <IfModule mod_headers.c>

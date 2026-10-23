@@ -39,6 +39,7 @@ switch ($route) {
         $d = current_device();
         json_out([
             'setup_needed' => user_count() === 0,
+            'setup_key_required' => (string) cfg('setup_key') !== '',
             'user'         => $d && $d['role'] === 'client' ? $d['username'] : null,
             'device'       => $d && $d['role'] === 'client' ? ['id' => (int) $d['id'], 'name' => $d['name'], 'type' => $d['type']] : null,
             'device_types' => DEVICE_TYPES,
@@ -47,6 +48,17 @@ switch ($route) {
     case 'setup':
         if (user_count() > 0) {
             fail('Setup ho chuka hai', 403);
+        }
+        // Until the owner exists the URL is public, so a setup key (config.php) stops strangers claiming the account.
+        $key = (string) cfg('setup_key');
+        if ($key !== '') {
+            if (too_many_failures()) {
+                fail('Bahut galat koshishen. 15 minute baad try karo.', 429);
+            }
+            if (!hash_equals($key, (string) ($in['setup_key'] ?? ''))) {
+                record_failure();
+                fail('Setup key galat hai', 403);
+            }
         }
         $u = trim((string) ($in['username'] ?? ''));
         $p = (string) ($in['password'] ?? '');

@@ -149,6 +149,10 @@ function showAuth(setup) {
       } catch (x) { err.textContent = x.message; }
     },
   },
+    setup && state.setup_key_required ? [
+      h('label', { for: 'sk' }, 'Setup key (server ki config.php me hai)'),
+      h('input', { id: 'sk', name: 'setup_key', autocomplete: 'off', required: true }),
+    ] : null,
     h('label', { for: 'u' }, 'Username'),
     h('input', { id: 'u', name: 'username', autocomplete: 'username', required: true }),
     h('label', { for: 'p' }, setup ? 'Password (kam se kam 12 akshar)' : 'Password'),

@@ -13,6 +13,9 @@ return [
 
     'timezone'          => 'Asia/Kolkata',
 
+    // Required once on the first-run setup page (random string). Empty = anyone can create the owner.
+    'setup_key'         => '',
+
     // PC actions that run without asking you first. Everything else
     // waits in "Pending" until you tap Approve in the app.
     'no_confirm_actions' => ['cpu_status', 'speak'],
