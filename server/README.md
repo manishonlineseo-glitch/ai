@@ -47,6 +47,13 @@ dialer / WhatsApp / YouTube opens. The tap is the approval, so nothing is dialle
 - A web page cannot listen for a wake word like "Hey Siri" in the background. You open the app and tap Mic.
   True hands-free needs a native Android app (possible later; not iPhone).
 
+## Voice approvals
+When something waits in Pending, tap Mic and say **"haan"** / **"nahi"** (Hindi script works too). The browser
+matches those short words itself and approves/denies the first waiting item; the AI is never involved in that
+decision, so text inside a note or web page can't approve anything. Longer sentences go to chat as normal.
+Turn on "Jawab bol kar sunao" and Jarvis also reads each new approval aloud.
+**shutdown/restart can't be approved by voice**, only by tapping the button (a misheard word must not power off a PC).
+
 ## Safety model
 - API key lives only in `config.php` on the server.
 - Every device has its own token; block/delete kills it at once. Agent tokens can't use the browser API.
