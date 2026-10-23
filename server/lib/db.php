@@ -1,0 +1,92 @@
+<?php
+declare(strict_types=1);
+
+function cfg(?string $key = null)
+{
+    static $c = null;
+    if ($c === null) {
+        $file = __DIR__ . '/../config.php';
+        $c = require (is_file($file) ? $file : __DIR__ . '/../config.sample.php');
+        date_default_timezone_set($c['timezone'] ?? 'UTC');
+    }
+    return $key === null ? $c : ($c[$key] ?? null);
+}
+
+function db(): PDO
+{
+    static $pdo = null;
+    if ($pdo) {
+        return $pdo;
+    }
+    $path = (string) cfg('db_path');
+    if (!is_dir(dirname($path))) {
+        mkdir(dirname($path), 0750, true);
+    }
+    $pdo = new PDO('sqlite:' . $path, null, null, [
+        PDO::ATTR_ERRMODE            => PDO::ERRMODE_EXCEPTION,
+        PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
+    ]);
+    $pdo->exec('PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;');
+    migrate($pdo);
+    return $pdo;
+}
+
+function migrate(PDO $pdo): void
+{
+    $pdo->exec('
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY,
+            username TEXT NOT NULL UNIQUE,
+            pass_hash TEXT NOT NULL,
+            created_at INTEGER NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS devices (
+            id INTEGER PRIMARY KEY,
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            name TEXT NOT NULL,
+            type TEXT NOT NULL,
+            role TEXT NOT NULL DEFAULT "client",
+            token_hash TEXT NOT NULL UNIQUE,
+            created_at INTEGER NOT NULL,
+            last_seen INTEGER NOT NULL DEFAULT 0,
+            blocked INTEGER NOT NULL DEFAULT 0,
+            user_agent TEXT
+        );
+        CREATE TABLE IF NOT EXISTS tasks (
+            id INTEGER PRIMARY KEY,
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            title TEXT NOT NULL,
+            done INTEGER NOT NULL DEFAULT 0,
+            created_at INTEGER NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS notes (
+            id INTEGER PRIMARY KEY,
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            body TEXT NOT NULL,
+            created_at INTEGER NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS commands (
+            id INTEGER PRIMARY KEY,
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            device_id INTEGER NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
+            action TEXT NOT NULL,
+            args TEXT NOT NULL DEFAULT "{}",
+            status TEXT NOT NULL,
+            result TEXT,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_cmd_dev ON commands(device_id, status);
+        CREATE TABLE IF NOT EXISTS chat (
+            id INTEGER PRIMARY KEY,
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            role TEXT NOT NULL,
+            content TEXT NOT NULL,
+            created_at INTEGER NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS login_attempts (
+            ip TEXT NOT NULL,
+            ts INTEGER NOT NULL
+        );
+    ');
+}

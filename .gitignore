@@ -146,3 +146,6 @@ server/data/*.sqlite*
 agent/config.json
 .env
 Face-Recognition/samples/
+
+# Python template ignores lib/, but server/lib holds our PHP code
+!server/lib/
