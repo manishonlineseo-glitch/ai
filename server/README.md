@@ -86,6 +86,13 @@ Say *"Laptop par Claude ke sessions batao"*. The agent reads the Claude Code ses
 (activity in the last 2 minutes), the last thing you asked, Claude's last message and its last step. It is exact and takes
 a fraction of a second, unlike `screen_look`, which is only for what is visually on screen.
 
+## Read the text of a window, no screenshot (`window_read`)
+Say *"Claude window ka text copy karke samjhao"*. The agent reads the window's text through Windows UI Automation (the same
+interface screen readers use: no screenshot, no clipboard, nothing is clicked or typed), then your own AI login (default Codex)
+explains it. Fast (about 15 s) and exact. Works for apps that expose their text (Claude, browsers, Notepad, Office...); if an app
+does not, the reply says so and `screen_look` is the fallback. It runs without approval (owner's choice): the copied text goes to
+that AI provider. Remove `window_read` from the agent's `allowed_actions` to switch it off.
+
 ## Look at the laptop screen ("cloud par kya chal raha hai")
 `screen_look`: the agent takes a screenshot (optionally after bringing a window whose title contains e.g. "Claude" to the front),
 hands it to a vision-capable CLI on your own login (default Codex/ChatGPT; claude and gemini also work) and returns a short answer

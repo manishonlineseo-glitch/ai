@@ -455,7 +455,7 @@ switch ($route) {
         $pdo->prepare(
             'UPDATE commands SET status = "failed", result = "timeout", updated_at = ?
              WHERE device_id = ? AND status = "running"
-               AND updated_at < CASE WHEN action LIKE "%\_read" ESCAPE "\" OR action LIKE "%\_work" ESCAPE "\" OR action = "screen_look" THEN ? ELSE ? END'
+               AND updated_at < CASE WHEN action LIKE "%\_read" ESCAPE "\" OR action LIKE "%\_work" ESCAPE "\" OR action IN ("screen_look","window_read") THEN ? ELSE ? END'
         )->execute([time(), $agent['id'], time() - 2400, time() - 120]);
         $pdo->prepare('UPDATE commands SET status = "expired", updated_at = ? WHERE device_id = ? AND status IN ("pending","awaiting_confirm") AND created_at < ?')
             ->execute([time(), $agent['id'], time() - 600]);

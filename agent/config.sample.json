@@ -23,7 +23,8 @@
     "gemini_read",
     "codex_read",
     "screen_look",
-    "claude_sessions"
+    "claude_sessions",
+    "window_read"
   ],
   "ai_timeout_minutes": 30
 }

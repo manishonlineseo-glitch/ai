@@ -280,6 +280,9 @@ function describe(c) {
       ' · ' + c.device + ' · project ' + a.project + (a.continue ? ' · pichla session jaari' : '') + '\n' + a.prompt;
   }
   if (c.action === 'claude_sessions') return 'Claude sessions dekho · ' + c.device;
+  if (c.action === 'window_read') {
+    return 'Window ka text padho · ' + c.device + (a.window ? ' · window: ' + a.window : ' · aage wali window') + (a.question ? '\n' + a.question : '');
+  }
   if (c.action === 'screen_look') {
     return 'Screen dekho · ' + c.device + (a.window ? ' · window: ' + a.window : '') + (a.question ? '\n' + a.question : '');
   }
@@ -289,7 +292,7 @@ function describe(c) {
 
 const AI_ACTION = /^(claude|gemini|codex)_(read|work)$/;
 const ENGINE_LABEL = { claude: 'Claude', gemini: 'Gemini', codex: 'ChatGPT (Codex)' };
-const isLong = (action) => AI_ACTION.test(action) || action === 'screen_look' || action === 'claude_sessions'; // answers that arrive later, in chat
+const isLong = (action) => AI_ACTION.test(action) || ['screen_look', 'claude_sessions', 'window_read'].includes(action); // answers that arrive later, in chat
 
 // Finished AI tasks are announced in the chat (or shown when the chat is next opened).
 let finishedSeen = null;

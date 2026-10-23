@@ -26,7 +26,7 @@ CONFIG_PATH = os.path.join(HERE, "config.json")
 ENGINES = ("claude", "gemini", "codex")
 AI_ACTIONS = {f"{e}_{m}" for e in ENGINES for m in ("read", "work")}
 ALL_ACTIONS = {"cpu_status", "speak", "open_url", "open_app", "lock", "shutdown", "restart", "cancel_shutdown",
-               "brain_chat", "screen_look", "claude_sessions"} | AI_ACTIONS
+               "brain_chat", "screen_look", "claude_sessions", "window_read"} | AI_ACTIONS
 STATE_PATH = os.path.join(HERE, "state.json")
 
 # Headless AI coding CLIs. Override any key under "claude" / "gemini" / "codex" in config.json.
@@ -371,6 +371,74 @@ def focus_window(title_part):
     return title
 
 
+TEXT_CONTROLS = {"TextControl", "EditControl", "DocumentControl", "HyperlinkControl", "ListItemControl", "TreeItemControl",
+                 "ButtonControl", "TabItemControl", "MenuItemControl", "HeaderControl", "CheckBoxControl", "RadioButtonControl"}
+
+
+def read_window_text(title_part, max_chars=30000, budget_seconds=25):
+    """Copy the visible text of a window through Windows UI Automation (what a screen reader sees): no screenshot,
+    no clipboard, nothing is clicked or typed. Returns (window title, text)."""
+    import uiautomation as auto
+
+    with auto.UIAutomationInitializerInThread():
+        if title_part:
+            win = auto.WindowControl(searchDepth=1, SubName=title_part)
+            if not win.Exists(3, 0.5):
+                raise LookupError(f"'{title_part}' naam ki koi khuli window nahi mili")
+        else:
+            win = auto.GetForegroundControl().GetTopLevelControl()
+        title = win.Name or "(bina naam)"
+        parts, seen, total = [], set(), 0
+        deadline = time.time() + budget_seconds
+
+        def walk(ctrl, depth):
+            nonlocal total
+            if depth > 45 or total >= max_chars or time.time() > deadline:
+                return
+            try:
+                name = (ctrl.Name or "").strip()
+                kind = ctrl.ControlTypeName
+                value = ""
+                if kind in ("EditControl", "DocumentControl"):
+                    try:
+                        value = (ctrl.GetValuePattern().Value or "").strip()
+                    except Exception:
+                        value = ""
+                for text in (value, name):
+                    if text and kind in TEXT_CONTROLS and text not in seen:
+                        seen.add(text)
+                        parts.append(text)
+                        total += len(text) + 1
+                children = ctrl.GetChildren()
+            except Exception:
+                return
+            for child in children:
+                walk(child, depth + 1)
+
+        walk(win, 0)
+    return title, "\n".join(parts)[:max_chars]
+
+
+def window_read(cfg, args):
+    """Copy the text of a window (or the front window) and let an AI explain it. No image is involved."""
+    window = str(args.get("window") or "").strip()
+    engine = str(args.get("engine") or "codex")
+    if engine not in ENGINES:
+        raise ValueError("unknown engine: " + engine)
+    question = str(args.get("question") or "").strip() or "Is window me kya likha hai aur kya chal raha hai? Samjhakar batao."
+    if window:
+        focus_window(window)
+    title, text = read_window_text(window)
+    if len(text.strip()) < 40:
+        raise RuntimeError(f"'{title}' se text nahi mil paya (app apna text screen-reader ko nahi deti). Ye app screen_look se dekho.")
+    prompt = (f"Below is text copied from the window titled \"{title}\" on the user's laptop (UI text: it can include menus, "
+              f"buttons and repeated labels; ignore that chrome and focus on the real content, progress and errors).\n\n"
+              f"QUESTION: {question}\n\nReply in the language of the question (Hindi/Hinglish/English), plain text, brief "
+              f"but complete. Say only what the text supports.\n\n----- WINDOW TEXT -----\n{text}")
+    answer = run_brain(cfg, {"engine": engine, "prompt": prompt})
+    return f"(window: {title}, {len(text)} akshar copy kiye)\n{answer}\n\n— text copy · {engine}"
+
+
 def screen_look(cfg, args):
     """Screenshot (optionally after bringing a window to the front) read by a vision-capable AI CLI.
     The picture lives in a temp file for this call only and is never sent to the Jarvis server."""
@@ -489,6 +557,8 @@ def run_action(cfg, action, args):
         return screen_look(cfg, args)
     if action == "claude_sessions":
         return claude_sessions(cfg, args)
+    if action == "window_read":
+        return window_read(cfg, args)
     if action in AI_ACTIONS:
         engine, mode = action.split("_")
         return run_ai(cfg, engine, mode, args)
@@ -567,7 +637,7 @@ def main():
                 sys.exit("Server ne token reject kiya (block ya delete hua?). Agent band.")
             r.raise_for_status()
             for cmd in r.json().get("commands", []):
-                if cmd["action"] in AI_ACTIONS or cmd["action"] in ("brain_chat", "screen_look"):
+                if cmd["action"] in AI_ACTIONS or cmd["action"] in ("brain_chat", "screen_look", "window_read", "claude_sessions"):
                     try:
                         (brain_queue if cmd["action"] == "brain_chat" else ai_queue).put_nowait(cmd)
                     except queue.Full:
