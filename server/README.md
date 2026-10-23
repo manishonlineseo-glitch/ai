@@ -80,6 +80,12 @@ Say *"Laptop par jarvis project ka status Gemini se check karo"*; default engine
 - AI tasks queue on the PC (max 5) and run one after another. Limits: Claude 25 turns / 2 USD, 30 minutes per task.
 - `*_work`, shutdown and restart can only be approved by **tapping**, never by voice.
 
+## What is Claude doing on my laptop? (`claude_sessions`)
+Say *"Laptop par Claude ke sessions batao"*. The agent reads the Claude Code session records on the laptop
+(`~/.claude/projects/*/*.jsonl`, nothing is sent to an AI) and replies with, per session: title, whether it is **running now**
+(activity in the last 2 minutes), the last thing you asked, Claude's last message and its last step. It is exact and takes
+a fraction of a second, unlike `screen_look`, which is only for what is visually on screen.
+
 ## Look at the laptop screen ("cloud par kya chal raha hai")
 `screen_look`: the agent takes a screenshot (optionally after bringing a window whose title contains e.g. "Claude" to the front),
 hands it to a vision-capable CLI on your own login (default Codex/ChatGPT; claude and gemini also work) and returns a short answer

@@ -5,13 +5,14 @@ const AI_ENGINES = ['claude', 'gemini', 'codex'];
 const PC_ACTIONS = [
     'cpu_status', 'speak', 'open_url', 'open_app', 'lock', 'shutdown', 'restart', 'cancel_shutdown',
     'claude_read', 'claude_work', 'gemini_read', 'gemini_work', 'codex_read', 'codex_work',
-    'screen_look',
+    'screen_look', 'claude_sessions',
 ];
 
 /** Small, reversible things run on their own; anything that edits files or powers off a PC waits for a tap. */
 const DEFAULT_AUTO_ACTIONS = [
     'cpu_status', 'speak', 'open_app', 'lock', 'cancel_shutdown', 'claude_read', 'gemini_read', 'codex_read',
     'screen_look', // the owner chose "no approval": the screenshot goes to their own AI login and is never stored
+    'claude_sessions', // reads the laptop's own Claude Code session records, no AI involved
 ];
 const DEFAULT_AUTO_URL_DOMAINS = [
     'youtube.com', 'google.com', 'wa.me', 'whatsapp.com', 'github.com', 'claude.ai', 'chatgpt.com', 'gemini.google.com',
@@ -42,7 +43,7 @@ function is_ai_action(string $action): bool
 /** Actions that take a while and whose answer is announced in chat when done. */
 function is_long_action(string $action): bool
 {
-    return is_ai_action($action) || $action === 'screen_look';
+    return is_ai_action($action) || in_array($action, ['screen_look', 'claude_sessions'], true);
 }
 
 function needs_approval(string $action, array $args): bool
@@ -103,6 +104,8 @@ function clean_pc_args(string $action, array $in): array
                 throw new InvalidArgumentException('prompt 1-4000 akshar ka chahiye');
             }
             return ['project' => $project, 'prompt' => $prompt, 'continue' => !empty($in['continue'])];
+        case 'claude_sessions':
+            return ['hours' => min(max((int) ($in['hours'] ?? 24), 1), 168)];
         case 'screen_look':
             $engine = (string) ($in['engine'] ?? '');
             $question = trim((string) ($in['question'] ?? ''));
@@ -269,6 +272,7 @@ function claude_tools(): array
              'url'    => ['type' => 'string', 'description' => 'For open_url'],
              'app'    => ['type' => 'string', 'description' => 'For open_app: a name from the agent\'s allowlist'],
              'text'   => ['type' => 'string', 'description' => 'For speak'],
+             'hours'    => ['type' => 'integer', 'description' => 'For claude_sessions: how many past hours to include (default 24)'],
              'question' => ['type' => 'string', 'description' => 'For screen_look: what to find out from the screenshot (optional)'],
              'window'   => ['type' => 'string', 'description' => 'For screen_look: part of a window title (e.g. "Claude") to bring to the front before the screenshot (optional)'],
              'engine'   => ['type' => 'string', 'enum' => AI_ENGINES, 'description' => 'For screen_look: which AI reads the screenshot (default: the brain engine)'],

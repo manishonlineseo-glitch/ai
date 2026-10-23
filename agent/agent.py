@@ -26,7 +26,7 @@ CONFIG_PATH = os.path.join(HERE, "config.json")
 ENGINES = ("claude", "gemini", "codex")
 AI_ACTIONS = {f"{e}_{m}" for e in ENGINES for m in ("read", "work")}
 ALL_ACTIONS = {"cpu_status", "speak", "open_url", "open_app", "lock", "shutdown", "restart", "cancel_shutdown",
-               "brain_chat", "screen_look"} | AI_ACTIONS
+               "brain_chat", "screen_look", "claude_sessions"} | AI_ACTIONS
 STATE_PATH = os.path.join(HERE, "state.json")
 
 # Headless AI coding CLIs. Override any key under "claude" / "gemini" / "codex" in config.json.
@@ -254,6 +254,92 @@ def run_brain(cfg, args):
             os.remove(temp_file)
 
 
+def _text_of(content):
+    """Plain text from a transcript message (a string or a list of blocks); tool results and tags are skipped."""
+    if isinstance(content, str):
+        parts = [content]
+    else:
+        parts = [b.get("text", "") for b in (content or []) if isinstance(b, dict) and b.get("type") == "text"]
+    text = " ".join(p.strip() for p in parts if p.strip() and not p.strip().startswith("[Image"))
+    return "" if text.startswith("<") else text  # <system-reminder>, <command-...> and similar injected tags
+
+
+def _short(text, n=170):
+    text = " ".join(str(text).split())
+    return text if len(text) <= n else text[: n - 1] + "…"
+
+
+def summarize_session(path, now):
+    """What one Claude Code session is doing, read from the tail of its local transcript (.jsonl)."""
+    size = os.path.getsize(path)
+    with open(path, "rb") as f:
+        f.seek(max(0, size - 1_500_000))
+        lines = f.read().decode("utf-8", errors="replace").splitlines()[1 if size > 1_500_000 else 0:]
+    title = cwd = last_user = last_text = last_tool = None
+    for line in lines:
+        try:
+            j = json.loads(line)
+        except ValueError:
+            continue
+        t = j.get("type")
+        if t == "custom-title" and j.get("customTitle"):
+            title = j["customTitle"]
+        if j.get("cwd"):
+            cwd = j["cwd"]
+        if j.get("isSidechain"):
+            continue
+        msg = j.get("message") if isinstance(j.get("message"), dict) else {}
+        if t == "user":
+            text = _text_of(msg.get("content"))
+            if text:
+                last_user = text
+        elif t == "assistant" and isinstance(msg.get("content"), list):
+            for b in msg["content"]:
+                if not isinstance(b, dict):
+                    continue
+                if b.get("type") == "text" and b.get("text", "").strip():
+                    last_text = b["text"]
+                elif b.get("type") == "tool_use":
+                    inp = b.get("input") or {}
+                    detail = inp.get("description") or inp.get("command") or inp.get("file_path") or inp.get("pattern") or inp.get("url") or ""
+                    last_tool = f"{b.get('name')}: {_short(detail, 110)}" if detail else str(b.get("name"))
+    age = now - os.path.getmtime(path)
+    if age < 120:
+        state = "CHAL RAHA HAI (abhi activity)"
+    elif age < 3600:
+        state = f"ruka hua, {int(age // 60)} min pehle tak chala"
+    else:
+        state = f"band, {age / 3600:.1f} ghante pehle tak chala"
+    out = [f"• {title or '(bina naam)'} — {state}", f"  folder: {cwd or os.path.basename(os.path.dirname(path))}"]
+    if last_user:
+        out.append(f"  aapne aakhri baar: \"{_short(last_user)}\"")
+    if last_text:
+        out.append(f"  Claude ne aakhri baar: \"{_short(last_text, 220)}\"")
+    if last_tool:
+        out.append(f"  aakhri kaam: {last_tool}")
+    return age, "\n".join(out)
+
+
+def claude_sessions(cfg, args):
+    """List the Claude Code sessions on this PC that were active recently, newest first (no AI involved)."""
+    import glob
+    hours = min(max(int(args.get("hours") or 24), 1), 168)
+    root = os.path.join(os.path.expanduser("~"), ".claude", "projects")
+    now = time.time()
+    found = []
+    for path in glob.glob(os.path.join(root, "*", "*.jsonl")):
+        folder = os.path.basename(os.path.dirname(path))
+        if "Temp-claude" in folder or "brain_workdir" in folder:  # Jarvis's own test/brain sessions
+            continue
+        if now - os.path.getmtime(path) <= hours * 3600:
+            found.append(path)
+    if not found:
+        return f"Pichle {hours} ghante me koi Claude Code session nahi mila."
+    found.sort(key=os.path.getmtime, reverse=True)
+    blocks = [summarize_session(p, now)[1] for p in found[:6]]
+    return f"Claude Code sessions (pichle {hours} ghante, {len(found)} mile):\n\n" + "\n\n".join(blocks)
+
+
 def focus_window(title_part):
     """Bring the first visible window whose title contains `title_part` to the front (Windows). Returns its title."""
     if sys.platform != "win32":
@@ -401,6 +487,8 @@ def run_action(cfg, action, args):
         return run_brain(cfg, args)
     if action == "screen_look":
         return screen_look(cfg, args)
+    if action == "claude_sessions":
+        return claude_sessions(cfg, args)
     if action in AI_ACTIONS:
         engine, mode = action.split("_")
         return run_ai(cfg, engine, mode, args)

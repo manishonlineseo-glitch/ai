@@ -279,6 +279,7 @@ function describe(c) {
     return ENGINE_LABEL[engine] + (mode === 'work' ? ' kaam (files badal sakta hai)' : ' padhai (read-only)') +
       ' · ' + c.device + ' · project ' + a.project + (a.continue ? ' · pichla session jaari' : '') + '\n' + a.prompt;
   }
+  if (c.action === 'claude_sessions') return 'Claude sessions dekho · ' + c.device;
   if (c.action === 'screen_look') {
     return 'Screen dekho · ' + c.device + (a.window ? ' · window: ' + a.window : '') + (a.question ? '\n' + a.question : '');
   }
@@ -288,7 +289,7 @@ function describe(c) {
 
 const AI_ACTION = /^(claude|gemini|codex)_(read|work)$/;
 const ENGINE_LABEL = { claude: 'Claude', gemini: 'Gemini', codex: 'ChatGPT (Codex)' };
-const isLong = (action) => AI_ACTION.test(action) || action === 'screen_look'; // answers that arrive later, in chat
+const isLong = (action) => AI_ACTION.test(action) || action === 'screen_look' || action === 'claude_sessions'; // answers that arrive later, in chat
 
 // Finished AI tasks are announced in the chat (or shown when the chat is next opened).
 let finishedSeen = null;
@@ -424,7 +425,7 @@ function buildHud(actions) {
       h('button', { class: 'talk', type: 'button', onclick: actions.talk, disabled: !SR }, wave, h('span', null, 'TALK TO JARVIS')),
       h('div', { class: 'row wrap hud-actions' },
         h('button', { class: 'ghost small', type: 'button', onclick: actions.pcStatus }, 'PC status'),
-        h('button', { class: 'ghost small', type: 'button', onclick: actions.screen }, 'Screen dekho'),
+        h('button', { class: 'ghost small', type: 'button', onclick: actions.screen }, 'Claude kya kar raha hai'),
         h('button', { class: 'ghost small', type: 'button', onclick: actions.newTask }, 'Naya task'),
         h('button', { class: 'ghost small danger', type: 'button', disabled: !s.pending, onclick: actions.stopAll }, 'Sab pending roko')));
 
@@ -521,7 +522,7 @@ function viewChat(view) {
   hud = buildHud({
     talk,
     pcStatus: () => send('Mere PC ka status batao'),
-    screen: () => send('Laptop ki screen dekhkar batao ki abhi kya khula hai aur kya chal raha hai'),
+    screen: () => send('Laptop par Claude ke sessions batao: kaun sa kaam chal raha hai aur kahan tak pahuncha'),
     newTask: () => { input.value = 'Task add karo: '; input.focus(); fit(); },
     stopAll: async () => { for (const p of [...pendingList]) await decide(p.route, p.id, false); note('Sab pending cancel kar diye.'); refreshHud(); },
   });
