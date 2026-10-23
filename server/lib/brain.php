@@ -93,6 +93,8 @@ function brain_prompt(int $userId, string $text, ?array $agent): string
         . "- For \"call mom\", \"open WhatsApp\", \"play a song on YouTube\" use phone_action (the user taps the button it shows).\n"
         . "- Work on the PC: pc_command with device = pc_agent and action claude_read/gemini_read/codex_read (read-only) or *_work (may edit files; the user must tap to approve). "
         . "Engine = the one the user names, else default_engine. project must be one of pc_projects. Write complete, self-contained prompts. Answers arrive in chat later, so just say it was started.\n"
+        . "- To see what is on the laptop screen (\"cloud par kya chal raha hai\", \"screen dekho\") use pc_command action screen_look with device = pc_agent; "
+        . "set window to part of a window title (e.g. \"Claude\") if the user names an app to open first, and question to what they want to know. The answer arrives in chat later.\n"
         . "- Small things run on their own; file edits, shutdown/restart and unknown links wait for the user's tap. Say so when an action needs approval.\n"
         . "- Never claim something was done: the server runs your actions and appends the real result.\n"
         . "- Never mention API keys or tokens.\n\n"

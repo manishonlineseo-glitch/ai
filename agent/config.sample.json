@@ -21,7 +21,8 @@
     "cancel_shutdown",
     "claude_read",
     "gemini_read",
-    "codex_read"
+    "codex_read",
+    "screen_look"
   ],
   "ai_timeout_minutes": 30
 }

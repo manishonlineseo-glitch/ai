@@ -5,11 +5,13 @@ const AI_ENGINES = ['claude', 'gemini', 'codex'];
 const PC_ACTIONS = [
     'cpu_status', 'speak', 'open_url', 'open_app', 'lock', 'shutdown', 'restart', 'cancel_shutdown',
     'claude_read', 'claude_work', 'gemini_read', 'gemini_work', 'codex_read', 'codex_work',
+    'screen_look',
 ];
 
 /** Small, reversible things run on their own; anything that edits files or powers off a PC waits for a tap. */
 const DEFAULT_AUTO_ACTIONS = [
     'cpu_status', 'speak', 'open_app', 'lock', 'cancel_shutdown', 'claude_read', 'gemini_read', 'codex_read',
+    'screen_look', // the owner chose "no approval": the screenshot goes to their own AI login and is never stored
 ];
 const DEFAULT_AUTO_URL_DOMAINS = [
     'youtube.com', 'google.com', 'wa.me', 'whatsapp.com', 'github.com', 'claude.ai', 'chatgpt.com', 'gemini.google.com',
@@ -18,6 +20,12 @@ const DEFAULT_AUTO_URL_DOMAINS = [
 function is_ai_action(string $action): bool
 {
     return (bool) preg_match('/^(claude|gemini|codex)_(read|work)$/', $action);
+}
+
+/** Actions that take a while and whose answer is announced in chat when done. */
+function is_long_action(string $action): bool
+{
+    return is_ai_action($action) || $action === 'screen_look';
 }
 
 function needs_approval(string $action, array $args): bool
@@ -75,6 +83,20 @@ function clean_pc_args(string $action, array $in): array
                 throw new InvalidArgumentException('prompt 1-4000 akshar ka chahiye');
             }
             return ['project' => $project, 'prompt' => $prompt, 'continue' => !empty($in['continue'])];
+        case 'screen_look':
+            $engine = (string) ($in['engine'] ?? '');
+            $question = trim((string) ($in['question'] ?? ''));
+            $window = trim((string) ($in['window'] ?? ''));
+            if ($engine !== '' && !in_array($engine, AI_ENGINES, true)) {
+                throw new InvalidArgumentException('engine claude/gemini/codex me se ek ho');
+            }
+            if (mb_strlen($question) > 1000) {
+                throw new InvalidArgumentException('question 1000 akshar se chhota ho');
+            }
+            if ($window !== '' && !preg_match('/^[\p{L}\p{N} _.\-()]{1,60}$/u', $window)) {
+                throw new InvalidArgumentException('window ka naam galat hai (sirf title ka hissa do)');
+            }
+            return ['engine' => $engine, 'question' => $question, 'window' => $window];
         case 'speak':
             $text = trim((string) ($in['text'] ?? ''));
             if ($text === '' || mb_strlen($text) > 300) {
@@ -224,6 +246,9 @@ function claude_tools(): array
              'url'    => ['type' => 'string', 'description' => 'For open_url'],
              'app'    => ['type' => 'string', 'description' => 'For open_app: a name from the agent\'s allowlist'],
              'text'   => ['type' => 'string', 'description' => 'For speak'],
+             'question' => ['type' => 'string', 'description' => 'For screen_look: what to find out from the screenshot (optional)'],
+             'window'   => ['type' => 'string', 'description' => 'For screen_look: part of a window title (e.g. "Claude") to bring to the front before the screenshot (optional)'],
+             'engine'   => ['type' => 'string', 'enum' => AI_ENGINES, 'description' => 'For screen_look: which AI reads the screenshot (default: the brain engine)'],
              'project'  => ['type' => 'string', 'description' => 'For the *_read/*_work actions: project name from the PC agent\'s allowlist'],
              'prompt'   => ['type' => 'string', 'description' => 'For the *_read/*_work actions: the full, self-contained instruction for the AI CLI on that PC'],
              'continue' => ['type' => 'boolean', 'description' => 'For the *_read/*_work actions: continue the previous session of that project'],
@@ -301,8 +326,8 @@ function run_tool(string $name, array $in, int $userId): string
                 if (!empty($GLOBALS['jarvis_no_wait'])) { // inside the agent's own request: don't block waiting for it
                     return 'Started as #' . $q['id'] . '; the result will show in the PC actions list.';
                 }
-                if (is_ai_action((string) $in['action'])) {
-                    return 'Started as #' . $q['id'] . ' without needing approval (read-only). It may take minutes; the answer will appear in the chat when it finishes.';
+                if (is_long_action((string) $in['action'])) {
+                    return 'Started as #' . $q['id'] . ' without needing approval (read-only). It may take a while; the answer will appear in the chat when it finishes.';
                 }
                 $r = wait_for_command($q['id'], 8);
                 if ($r['status'] === 'done') {

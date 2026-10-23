@@ -26,7 +26,7 @@ CONFIG_PATH = os.path.join(HERE, "config.json")
 ENGINES = ("claude", "gemini", "codex")
 AI_ACTIONS = {f"{e}_{m}" for e in ENGINES for m in ("read", "work")}
 ALL_ACTIONS = {"cpu_status", "speak", "open_url", "open_app", "lock", "shutdown", "restart", "cancel_shutdown",
-               "brain_chat"} | AI_ACTIONS
+               "brain_chat", "screen_look"} | AI_ACTIONS
 STATE_PATH = os.path.join(HERE, "state.json")
 
 # Headless AI coding CLIs. Override any key under "claude" / "gemini" / "codex" in config.json.
@@ -254,6 +254,103 @@ def run_brain(cfg, args):
             os.remove(temp_file)
 
 
+def focus_window(title_part):
+    """Bring the first visible window whose title contains `title_part` to the front (Windows). Returns its title."""
+    if sys.platform != "win32":
+        raise NotImplementedError("window focus abhi sirf Windows par")
+    user32 = ctypes.windll.user32
+    found = []
+    enum_proc = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
+
+    def visit(hwnd, _):
+        if user32.IsWindowVisible(hwnd):
+            length = user32.GetWindowTextLengthW(hwnd)
+            if length:
+                buf = ctypes.create_unicode_buffer(length + 1)
+                user32.GetWindowTextW(hwnd, buf, length + 1)
+                if title_part.lower() in buf.value.lower():
+                    found.append((hwnd, buf.value))
+        return True
+
+    user32.EnumWindows(enum_proc(visit), 0)
+    if not found:
+        raise LookupError(f"'{title_part}' naam ki koi khuli window nahi mili")
+    hwnd, title = found[0]
+    if user32.IsIconic(hwnd):
+        user32.ShowWindow(hwnd, 9)  # SW_RESTORE
+    user32.keybd_event(0x12, 0, 0, 0)  # a tap on Alt lets SetForegroundWindow through Windows' focus lock
+    user32.keybd_event(0x12, 0, 2, 0)
+    user32.SetForegroundWindow(hwnd)
+    time.sleep(1.5)
+    return title
+
+
+def screen_look(cfg, args):
+    """Screenshot (optionally after bringing a window to the front) read by a vision-capable AI CLI.
+    The picture lives in a temp file for this call only and is never sent to the Jarvis server."""
+    import secrets
+    import tempfile
+    from PIL import ImageGrab
+
+    engine = str(args.get("engine") or "codex")
+    if engine not in ENGINES:
+        raise ValueError("unknown engine: " + engine)
+    question = str(args.get("question") or "").strip() or "Is screen par kya khula hai aur kya ho raha hai? Short summary do."
+    window = str(args.get("window") or "").strip()
+    note = ""
+    if window:
+        title = focus_window(window)
+        note = f"(window: {title}) "
+    os.makedirs(BRAIN_DIR, exist_ok=True)
+    name = f"screen_{secrets.token_hex(4)}.png"
+    path = os.path.join(BRAIN_DIR, name)
+    temp_out = None
+    try:
+        img = ImageGrab.grab(all_screens=True)
+        if img.width > 1920:  # keep the upload small and fast
+            img = img.resize((1920, round(img.height * 1920 / img.width)))
+        img.save(path)
+        prompt = (question + "\nReply in the language of the question (Hindi/Hinglish/English), brief, plain text. "
+                  "Describe only what is visible on the screenshot; do not guess about anything hidden.")
+        exe = cli_executable(cfg, engine)
+        stdin = None
+        if engine == "codex":
+            fd, temp_out = tempfile.mkstemp(prefix="jarvis_screen_", suffix=".txt")
+            os.close(fd)
+            cmd = exe + ["exec", "-i", path, "-C", BRAIN_DIR, "-s", "read-only", "--skip-git-repo-check", "-o", temp_out, "-"]
+            stdin = prompt  # `-i` is variadic, so it comes before the other flags and the prompt goes over stdin
+        elif engine == "claude":
+            cmd = exe + ["-p", "--output-format", "json", "--tools", "Read", "--allowedTools", "Read", "--max-turns", "4"]
+            stdin = prompt + f"\nThe screenshot is the image file {name} in the current folder: read it first."
+        else:
+            cmd = exe + ["-p", f"Look at the image @{name} . " + prompt, "--output-format", "json", "--approval-mode", "plan"]
+        proc = subprocess.Popen(cmd, cwd=BRAIN_DIR, stdin=subprocess.PIPE if stdin else subprocess.DEVNULL,
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="replace")
+        try:
+            out, err = proc.communicate(stdin, timeout=cfg.get("screen_timeout_seconds", 180))
+        except subprocess.TimeoutExpired:
+            kill_tree(proc)
+            raise TimeoutError(f"{engine} ne screen padhne me bahut der ki (timeout)")
+        if engine == "codex":
+            with open(temp_out, encoding="utf-8", errors="replace") as f:
+                text = f.read().strip()
+        else:
+            try:
+                j = json.loads(out)
+            except ValueError:
+                raise RuntimeError((out.strip() or err.strip() or f"exit code {proc.returncode}")[:1500])
+            if j.get("is_error") or j.get("error"):
+                raise RuntimeError(str(j.get("result") or j.get("error"))[:1500])
+            text = str((j.get("result") if engine == "claude" else j.get("response")) or "").strip()
+        if proc.returncode != 0 or not text:
+            raise RuntimeError((text or err.strip() or out.strip() or f"exit code {proc.returncode}")[:1500])
+        return note + text + f"\n\n— screen · {engine}"
+    finally:
+        for p in (path, temp_out):
+            if p and os.path.exists(p):
+                os.remove(p)
+
+
 def run_ai(cfg, engine, mode, args):
     """Run an AI coding CLI headless in an allow-listed project folder and return its final answer."""
     project = str(args.get("project", ""))
@@ -302,6 +399,8 @@ def run_action(cfg, action, args):
         raise PermissionError(f"{action} is agent par band hai")
     if action == "brain_chat":
         return run_brain(cfg, args)
+    if action == "screen_look":
+        return screen_look(cfg, args)
     if action in AI_ACTIONS:
         engine, mode = action.split("_")
         return run_ai(cfg, engine, mode, args)
@@ -380,7 +479,7 @@ def main():
                 sys.exit("Server ne token reject kiya (block ya delete hua?). Agent band.")
             r.raise_for_status()
             for cmd in r.json().get("commands", []):
-                if cmd["action"] in AI_ACTIONS or cmd["action"] == "brain_chat":
+                if cmd["action"] in AI_ACTIONS or cmd["action"] in ("brain_chat", "screen_look"):
                     try:
                         (brain_queue if cmd["action"] == "brain_chat" else ai_queue).put_nowait(cmd)
                     except queue.Full:

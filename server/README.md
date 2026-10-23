@@ -80,6 +80,13 @@ Say *"Laptop par jarvis project ka status Gemini se check karo"*; default engine
 - AI tasks queue on the PC (max 5) and run one after another. Limits: Claude 25 turns / 2 USD, 30 minutes per task.
 - `*_work`, shutdown and restart can only be approved by **tapping**, never by voice.
 
+## Look at the laptop screen ("cloud par kya chal raha hai")
+`screen_look`: the agent takes a screenshot (optionally after bringing a window whose title contains e.g. "Claude" to the front),
+hands it to a vision-capable CLI on your own login (default Codex/ChatGPT; claude and gemini also work) and returns a short answer
+in chat. The picture exists only as a temp file during that call; it is never sent to the Jarvis server. By the owner's choice it
+runs **without approval**, so anything visible on screen can reach that AI provider; remove `screen_look` from the agent's
+`allowed_actions` (or from `DEFAULT_AUTO_ACTIONS`) to switch it off or make it ask. Windows only for window focus.
+
 ## Safety model
 - API key lives only in `config.php` on the server.
 - Every device has its own token; block/delete kills it at once. Agent tokens can't use the browser API.

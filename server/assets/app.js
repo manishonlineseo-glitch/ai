@@ -279,18 +279,22 @@ function describe(c) {
     return ENGINE_LABEL[engine] + (mode === 'work' ? ' kaam (files badal sakta hai)' : ' padhai (read-only)') +
       ' · ' + c.device + ' · project ' + a.project + (a.continue ? ' · pichla session jaari' : '') + '\n' + a.prompt;
   }
+  if (c.action === 'screen_look') {
+    return 'Screen dekho · ' + c.device + (a.window ? ' · window: ' + a.window : '') + (a.question ? '\n' + a.question : '');
+  }
   const detail = a.url || a.app || a.text || '';
   return c.action + (detail ? ' → ' + detail : '') + ' (' + c.device + ')';
 }
 
 const AI_ACTION = /^(claude|gemini|codex)_(read|work)$/;
 const ENGINE_LABEL = { claude: 'Claude', gemini: 'Gemini', codex: 'ChatGPT (Codex)' };
+const isLong = (action) => AI_ACTION.test(action) || action === 'screen_look'; // answers that arrive later, in chat
 
 // Finished AI tasks are announced in the chat (or shown when the chat is next opened).
 let finishedSeen = null;
 let missedNotes = [];
 function announceFinished(cmds) {
-  const done = cmds.filter((c) => AI_ACTION.test(c.action) && (c.status === 'done' || c.status === 'failed'));
+  const done = cmds.filter((c) => isLong(c.action) && (c.status === 'done' || c.status === 'failed'));
   if (finishedSeen === null) { finishedSeen = new Set(done.map((c) => c.id)); return; } // first load: stay quiet
   for (const c of done.reverse()) {
     if (finishedSeen.has(c.id)) continue;
@@ -420,6 +424,7 @@ function buildHud(actions) {
       h('button', { class: 'talk', type: 'button', onclick: actions.talk, disabled: !SR }, wave, h('span', null, 'TALK TO JARVIS')),
       h('div', { class: 'row wrap hud-actions' },
         h('button', { class: 'ghost small', type: 'button', onclick: actions.pcStatus }, 'PC status'),
+        h('button', { class: 'ghost small', type: 'button', onclick: actions.screen }, 'Screen dekho'),
         h('button', { class: 'ghost small', type: 'button', onclick: actions.newTask }, 'Naya task'),
         h('button', { class: 'ghost small danger', type: 'button', disabled: !s.pending, onclick: actions.stopAll }, 'Sab pending roko')));
 
@@ -516,6 +521,7 @@ function viewChat(view) {
   hud = buildHud({
     talk,
     pcStatus: () => send('Mere PC ka status batao'),
+    screen: () => send('Laptop ki screen dekhkar batao ki abhi kya khula hai aur kya chal raha hai'),
     newTask: () => { input.value = 'Task add karo: '; input.focus(); fit(); },
     stopAll: async () => { for (const p of [...pendingList]) await decide(p.route, p.id, false); note('Sab pending cancel kar diye.'); refreshHud(); },
   });
@@ -730,7 +736,7 @@ function renderRecent(cmds) {
     const full = c.result_len > 1500;
     return h('div', { class: 'item' },
       h('div', { class: 'grow' }, h('div', { class: 'mono' }, describe(c)),
-        c.result ? (AI_ACTION.test(c.action)
+        c.result ? (isLong(c.action)
           ? h('details', { ontoggle: async (e) => {
             if (e.target.open && full) {
               try { body.textContent = (await api('command_result&id=' + c.id)).result; } catch (x) { body.textContent = x.message; }
