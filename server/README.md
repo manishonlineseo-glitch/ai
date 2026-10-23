@@ -54,6 +54,13 @@ decision, so text inside a note or web page can't approve anything. Longer sente
 Turn on "Jawab bol kar sunao" and Jarvis also reads each new approval aloud.
 **shutdown/restart can't be approved by voice**, only by tapping the button (a misheard word must not power off a PC).
 
+## Chat without the API (the laptop is the brain)
+By default Jarvis does **not** use the Anthropic API. Each chat message goes to your PC agent, which asks an AI CLI that is
+logged in with your own subscription (default **Codex / ChatGPT**; set `'brain_engine' => 'claude'` or `'gemini'` in config.php).
+The CLI runs with no tools in an empty folder and only answers with a JSON plan; the server then runs the planned tools
+(tasks, notes, call/WhatsApp buttons, PC actions) with the usual approval rules. A reply takes about 10 seconds and needs
+the laptop agent to be running. `'brain' => 'api'` uses the paid API instead, `'auto'` uses the laptop when it is online.
+
 ## Work on your laptop from your phone (Claude, Gemini, ChatGPT/Codex)
 The phone talks to Jarvis, Jarvis sends the job to the **PC agent**, and the agent runs an AI coding CLI headless
 in a project folder you allowed: Claude Code (`claude -p`), Gemini CLI (`gemini -p`) or Codex (`codex exec`, ChatGPT login).

@@ -36,10 +36,14 @@ function migrate(PDO $pdo): void
     migrate_tables($pdo);
     // Columns added after the first release (SQLite has no ADD COLUMN IF NOT EXISTS).
     $have = array_column($pdo->query('PRAGMA table_info(devices)')->fetchAll(), 'name');
-    foreach (['cpu' => 'REAL', 'ram' => 'REAL', 'battery' => 'REAL', 'metrics_at' => 'INTEGER', 'login_id' => 'INTEGER'] as $col => $type) {
+    foreach (['cpu' => 'REAL', 'ram' => 'REAL', 'battery' => 'REAL', 'metrics_at' => 'INTEGER', 'login_id' => 'INTEGER', 'projects' => 'TEXT'] as $col => $type) {
         if (!in_array($col, $have, true)) {
             $pdo->exec("ALTER TABLE devices ADD COLUMN $col $type");
         }
+    }
+    $haveCmd = array_column($pdo->query('PRAGMA table_info(commands)')->fetchAll(), 'name');
+    if (!in_array('final', $haveCmd, true)) {
+        $pdo->exec('ALTER TABLE commands ADD COLUMN final TEXT');
     }
 }
 

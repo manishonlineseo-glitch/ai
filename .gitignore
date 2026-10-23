@@ -155,3 +155,4 @@ agent/venv/
 agent/state.json
 agent/agent.log
 agent/agent.err.log
+agent/brain_workdir/

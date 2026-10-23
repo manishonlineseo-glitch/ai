@@ -5,6 +5,7 @@ require __DIR__ . '/lib/db.php';
 require __DIR__ . '/lib/auth.php';
 require __DIR__ . '/lib/tools.php';
 require __DIR__ . '/lib/whatsapp.php';
+require __DIR__ . '/lib/brain.php';
 require __DIR__ . '/lib/claude.php';
 
 if (cfg('require_https') && !is_https()) {
@@ -191,6 +192,9 @@ switch ($route) {
             'ai'         => [
                 'model'     => (string) (cfg('model') ?: 'claude-sonnet-5-5'),
                 'key_set'   => (string) cfg('anthropic_api_key') !== '',
+                'brain'     => brain_mode(),
+                'engine'    => brain_engine(),
+                'laptop_online' => online_agent($uid) !== null,
                 'whatsapp'  => (string) cfg('whatsapp_token') !== '' && (string) cfg('whatsapp_phone_id') !== '',
                 'contacts'  => count(wa_contacts()),
             ],
@@ -356,15 +360,40 @@ switch ($route) {
         }
         $st = $pdo->prepare('SELECT COUNT(*) FROM chat WHERE user_id = ? AND role = "user" AND created_at > ?');
         $st->execute([$me['user_id'], time() - 60]);
-        if ((int) $st->fetchColumn() >= (int) cfg('chat_rate_per_min')) {
+        if ((int) $st->fetchColumn() >= ((int) cfg('chat_rate_per_min') ?: 20)) {
             fail('Thoda ruko, bahut jaldi jaldi messages', 429);
         }
+        $uid = (int) $me['user_id'];
+        $mode = brain_mode();
         try {
-            $reply = run_chat((int) $me['user_id'], $text);
-            json_out(['reply' => $reply, 'actions' => ui_actions()]);
+            // laptop = your own subscription via the PC agent (no API bill); api = Anthropic API; auto = laptop if online, else API
+            $useApi = $mode === 'api' || ($mode === 'auto' && !online_agent($uid) && (string) cfg('anthropic_api_key') !== '');
+            if ($useApi) {
+                $reply = run_chat($uid, $text);
+                json_out(['reply' => $reply, 'actions' => ui_actions()]);
+            }
+            json_out(['job' => queue_brain($uid, $text)]);
         } catch (RuntimeException $e) {
             fail($e->getMessage(), 502);
         }
+
+    case 'chat_poll':
+        $me = require_client();
+        $st = $pdo->prepare('SELECT status, final, created_at FROM commands WHERE id = ? AND user_id = ? AND action = "brain_chat"');
+        $st->execute([(int) ($_GET['id'] ?? 0), $me['user_id']]);
+        $row = $st->fetch();
+        if (!$row) {
+            fail('Nahi mila', 404);
+        }
+        if ($row['final'] !== null) {
+            json_out(['done' => true] + (json_decode($row['final'], true) ?: ['error' => 'Jawab padh nahi paya']));
+        }
+        if (time() - (int) $row['created_at'] > 240) {
+            $pdo->prepare('UPDATE commands SET status = "failed", result = "timeout", updated_at = ? WHERE id = ? AND status IN ("pending","running")')
+                ->execute([time(), (int) ($_GET['id'] ?? 0)]);
+            json_out(['done' => true, 'error' => 'Laptop ne waqt par jawab nahi diya (agent band ya CLI login nahi?)']);
+        }
+        json_out(['done' => false, 'status' => $row['status']]);
 
     // ---------- PC commands (browser side) ----------
     case 'commands':
@@ -372,7 +401,7 @@ switch ($route) {
         $st = $pdo->prepare(
             'SELECT c.id, c.action, c.args, c.status, c.result, c.created_at, d.name AS device
              FROM commands c JOIN devices d ON d.id = c.device_id
-             WHERE c.user_id = ? ORDER BY c.id DESC LIMIT 20'
+             WHERE c.user_id = ? AND c.action <> "brain_chat" ORDER BY c.id DESC LIMIT 20'
         );
         $st->execute([$me['user_id']]);
         $rows = array_map(function ($r) {
@@ -416,8 +445,12 @@ switch ($route) {
         $agent = require_agent();
         // Optional live numbers the agent reports with each poll (0-100).
         $pct = static fn(string $k): ?float => isset($_GET[$k]) && is_numeric($_GET[$k]) ? max(0.0, min(100.0, (float) $_GET[$k])) : null;
-        $pdo->prepare('UPDATE devices SET cpu = ?, ram = ?, battery = ?, metrics_at = ? WHERE id = ?')
-            ->execute([$pct('cpu'), $pct('ram'), $pct('bat'), time(), $agent['id']]);
+        $projects = array_values(array_filter(
+            array_slice(explode(',', (string) ($_GET['projects'] ?? '')), 0, 20),
+            fn($p) => preg_match('/^[A-Za-z0-9 _.\-]{1,40}$/', $p)
+        ));
+        $pdo->prepare('UPDATE devices SET cpu = ?, ram = ?, battery = ?, metrics_at = ?, projects = ? WHERE id = ?')
+            ->execute([$pct('cpu'), $pct('ram'), $pct('bat'), time(), json_encode($projects), $agent['id']]);
         // Claude Code tasks may run for many minutes; everything else should answer within two.
         $pdo->prepare(
             'UPDATE commands SET status = "failed", result = "timeout", updated_at = ?
@@ -441,13 +474,17 @@ switch ($route) {
         $agent = require_agent();
         $act = $pdo->prepare('SELECT action FROM commands WHERE id = ? AND device_id = ?');
         $act->execute([(int) ($in['id'] ?? 0), $agent['id']]);
-        $limit = is_ai_action((string) $act->fetchColumn()) ? 20000 : 2000;
+        $action = (string) $act->fetchColumn();
+        $limit = is_ai_action($action) || $action === 'brain_chat' ? 20000 : 2000;
         $st = $pdo->prepare('UPDATE commands SET status = ?, result = ?, updated_at = ? WHERE id = ? AND device_id = ? AND status = "running"');
         $st->execute([
             empty($in['ok']) ? 'failed' : 'done',
             mb_substr((string) ($in['result'] ?? ''), 0, $limit),
             time(), (int) ($in['id'] ?? 0), $agent['id'],
         ]);
+        if ($st->rowCount() > 0 && $action === 'brain_chat') {
+            finalize_brain((int) $in['id']); // run the planned tools and store the answer for the phone
+        }
         json_out(['ok' => $st->rowCount() > 0]);
 
     default:

@@ -10,6 +10,7 @@
     "jarvis": "C:\\xampp\\htdocs\\ai"
   },
   "allowed_actions": [
+    "brain_chat",
     "cpu_status",
     "speak",
     "open_url",

@@ -298,6 +298,9 @@ function run_tool(string $name, array $in, int $userId): string
                 if ($q['status'] === 'awaiting_confirm') {
                     return 'Queued as #' . $q['id'] . ' but NOT run yet: it needs the user\'s approval in the app (Pending section).';
                 }
+                if (!empty($GLOBALS['jarvis_no_wait'])) { // inside the agent's own request: don't block waiting for it
+                    return 'Started as #' . $q['id'] . '; the result will show in the PC actions list.';
+                }
                 if (is_ai_action((string) $in['action'])) {
                     return 'Started as #' . $q['id'] . ' without needing approval (read-only). It may take minutes; the answer will appear in the chat when it finishes.';
                 }

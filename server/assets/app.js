@@ -383,8 +383,9 @@ function buildHud(actions) {
     const now = new Date();
     clock.textContent = now.toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'short' }) + ' · ' + now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     const online = s.devices.filter((d) => d.online).length;
-    const ok = s.ai.key_set;
-    state.textContent = ok ? '● ONLINE' : '● AI KEY MISSING';
+    // ready = the chosen brain can answer: your laptop (subscription) or the API key
+    const ok = s.ai.brain === 'api' ? s.ai.key_set : s.ai.brain === 'auto' ? (s.ai.laptop_online || s.ai.key_set) : s.ai.laptop_online;
+    state.textContent = ok ? '● ONLINE' : (s.ai.brain === 'api' ? '● AI KEY MISSING' : '● LAPTOP AGENT OFFLINE');
     state.className = 'hud-state ' + (ok ? 'good' : 'bad');
 
     const sys = hudCard('SYSTEM OVERVIEW', s.agents.filter((a) => a.online).length + ' PC ONLINE',
@@ -409,8 +410,11 @@ function buildHud(actions) {
 
     const core = hudCard('AI CORE', s.pending ? s.pending + ' PENDING' : 'STANDBY',
       h('dl', { class: 'hud-kv' },
-        h('dt', null, 'Model'), h('dd', { class: 'mono' }, s.ai.model),
-        h('dt', null, 'Claude'), h('dd', { class: s.ai.key_set ? 'good' : 'bad' }, s.ai.key_set ? 'Linked' : 'Key missing'),
+        h('dt', null, 'Brain'), h('dd', { class: 'mono' }, s.ai.brain === 'api' ? s.ai.model : ENGINE_LABEL[s.ai.engine] + ' (laptop)'),
+        h('dt', null, s.ai.brain === 'api' ? 'Claude API' : 'Laptop'),
+        s.ai.brain === 'api'
+          ? h('dd', { class: s.ai.key_set ? 'good' : 'bad' }, s.ai.key_set ? 'Linked' : 'Key missing')
+          : h('dd', { class: s.ai.laptop_online ? 'good' : 'bad' }, s.ai.laptop_online ? 'Online' : 'Agent offline'),
         h('dt', null, 'Voice'), h('dd', { class: SR ? 'good' : 'bad' }, SR ? 'Ready' : 'Browser me nahi'),
         h('dt', null, 'WhatsApp'), h('dd', null, s.ai.contacts + ' contacts' + (s.ai.whatsapp ? ' · API' : ' · tap mode'))),
       h('button', { class: 'talk', type: 'button', onclick: actions.talk, disabled: !SR }, wave, h('span', null, 'TALK TO JARVIS')),
@@ -457,7 +461,19 @@ function viewChat(view) {
     const wait = add('assistant typing', null);
     wait.append(h('span'), h('span'), h('span'));
     try {
-      const { reply, actions } = await api('chat', { text });
+      let res = await api('chat', { text });
+      if (res.job) { // the laptop is thinking (your own subscription, no API); poll until it answers
+        const t0 = Date.now();
+        wait.querySelector('span:last-child').textContent = '';
+        for (;;) {
+          await new Promise((r) => setTimeout(r, 1500));
+          res = await api('chat_poll&id=' + res.job);
+          if (res.done) break;
+          if (Date.now() - t0 > 250000) throw new Error('Laptop se jawab nahi aaya');
+        }
+        if (res.error) throw new Error(res.error);
+      }
+      const { reply, actions } = res;
       wait.remove();
       add('assistant', reply);
       for (const a of actions || []) {

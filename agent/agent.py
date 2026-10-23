@@ -25,7 +25,8 @@ CONFIG_PATH = os.path.join(HERE, "config.json")
 
 ENGINES = ("claude", "gemini", "codex")
 AI_ACTIONS = {f"{e}_{m}" for e in ENGINES for m in ("read", "work")}
-ALL_ACTIONS = {"cpu_status", "speak", "open_url", "open_app", "lock", "shutdown", "restart", "cancel_shutdown"} | AI_ACTIONS
+ALL_ACTIONS = {"cpu_status", "speak", "open_url", "open_app", "lock", "shutdown", "restart", "cancel_shutdown",
+               "brain_chat"} | AI_ACTIONS
 STATE_PATH = os.path.join(HERE, "state.json")
 
 # Headless AI coding CLIs. Override any key under "claude" / "gemini" / "codex" in config.json.
@@ -201,6 +202,58 @@ def build_command(cfg, engine, mode, prompt, path, resume, state_project):
     return cmd, read, last
 
 
+BRAIN_DIR = os.path.join(HERE, "brain_workdir")  # empty folder: the brain must have nothing to read or edit
+
+
+def run_brain(cfg, args):
+    """Chat brain: ask a logged-in AI CLI (your own subscription) to answer with Jarvis's JSON plan.
+    No tools are enabled, the prompt goes in over stdin, and the reply text is returned for the server to act on."""
+    engine = str(args.get("engine", "codex"))
+    if engine not in ENGINES:
+        raise ValueError("unknown engine: " + engine)
+    prompt = str(args.get("prompt", ""))
+    if not prompt.strip():
+        raise ValueError("prompt khali hai")
+    os.makedirs(BRAIN_DIR, exist_ok=True)
+    exe = cli_executable(cfg, engine)
+    temp_file = None
+    if engine == "claude":
+        cmd = exe + ["-p", "--output-format", "json", "--tools", "", "--max-turns", "3", "--permission-mode", "default"]
+    elif engine == "gemini":
+        cmd = exe + ["-p", "Follow the instructions given on stdin and answer with only the JSON object they ask for.",
+                     "--output-format", "json", "--approval-mode", "plan"]
+    else:
+        import tempfile
+        fd, temp_file = tempfile.mkstemp(prefix="jarvis_brain_", suffix=".txt")
+        os.close(fd)
+        cmd = exe + ["exec", "-C", BRAIN_DIR, "-s", "read-only", "--skip-git-repo-check", "-o", temp_file, "-"]
+    try:
+        proc = subprocess.Popen(cmd, cwd=BRAIN_DIR, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                text=True, encoding="utf-8", errors="replace")
+        try:
+            out, err = proc.communicate(prompt, timeout=cfg.get("brain_timeout_seconds", 150))
+        except subprocess.TimeoutExpired:
+            kill_tree(proc)
+            raise TimeoutError(f"{engine} ne jawab nahi diya (timeout)")
+        if engine == "codex":
+            with open(temp_file, encoding="utf-8", errors="replace") as f:
+                text = f.read().strip()
+        else:
+            try:
+                j = json.loads(out)
+            except ValueError:
+                raise RuntimeError((out.strip() or err.strip() or f"exit code {proc.returncode}")[:1500])
+            if j.get("is_error") or j.get("error"):
+                raise RuntimeError(str(j.get("result") or j.get("error"))[:1500])
+            text = str((j.get("result") if engine == "claude" else j.get("response")) or "").strip()
+        if proc.returncode != 0 or not text:
+            raise RuntimeError((text or err.strip() or out.strip() or f"exit code {proc.returncode}")[:1500])
+        return text
+    finally:
+        if temp_file and os.path.exists(temp_file):
+            os.remove(temp_file)
+
+
 def run_ai(cfg, engine, mode, args):
     """Run an AI coding CLI headless in an allow-listed project folder and return its final answer."""
     project = str(args.get("project", ""))
@@ -247,6 +300,8 @@ def run_ai(cfg, engine, mode, args):
 def run_action(cfg, action, args):
     if action not in cfg["allowed_actions"]:
         raise PermissionError(f"{action} is agent par band hai")
+    if action == "brain_chat":
+        return run_brain(cfg, args)
     if action in AI_ACTIONS:
         engine, mode = action.split("_")
         return run_ai(cfg, engine, mode, args)
@@ -302,15 +357,21 @@ def main():
             except requests.RequestException:
                 time.sleep(5)
 
-    def ai_worker():
-        while True:
-            execute(ai_queue.get())
+    brain_queue = queue.Queue(maxsize=3)  # chat turns get their own lane so a long coding task never blocks them
 
-    threading.Thread(target=ai_worker, daemon=True).start()
+    def make_worker(q):
+        def worker():
+            while True:
+                execute(q.get())
+        return worker
+
+    threading.Thread(target=make_worker(ai_queue), daemon=True).start()
+    threading.Thread(target=make_worker(brain_queue), daemon=True).start()
 
     while True:
         try:
-            params = {"cpu": psutil.cpu_percent(interval=None), "ram": psutil.virtual_memory().percent}
+            params = {"cpu": psutil.cpu_percent(interval=None), "ram": psutil.virtual_memory().percent,
+                      "projects": ",".join(cfg["projects"].keys())}
             battery = psutil.sensors_battery()
             if battery:
                 params["bat"] = battery.percent
@@ -319,9 +380,9 @@ def main():
                 sys.exit("Server ne token reject kiya (block ya delete hua?). Agent band.")
             r.raise_for_status()
             for cmd in r.json().get("commands", []):
-                if cmd["action"] in AI_ACTIONS:
+                if cmd["action"] in AI_ACTIONS or cmd["action"] == "brain_chat":
                     try:
-                        ai_queue.put_nowait(cmd)
+                        (brain_queue if cmd["action"] == "brain_chat" else ai_queue).put_nowait(cmd)
                     except queue.Full:
                         s.post(base + "agent_result", json={"id": cmd["id"], "ok": False,
                                "result": "Queue bhari hai (5 AI task intezaar me), thodi der baad dobara bhejo"}, timeout=15)
