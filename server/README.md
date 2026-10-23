@@ -77,6 +77,20 @@ Results are written into the task log and announced in chat. **Report** tab: mor
 automatically (what finished today, what is pending, what needs your review); add daily routines such as "7:30 AI news".
 The scheduler runs when the PC agent is running or the web app is open (each calls `tick` about once a minute); a real cron on a VPS is better later.
 
+## Apps (Windows and Android)
+Devices tab > **Apps**: the two installers are downloaded from the site (only while logged in; they live in `~/jarvis_data/downloads`, outside the web root).
+- **Windows** (`agent/jarvis_app.py`, built by `agent/build_windows.bat` into `dist/JarvisAgent.exe`): a tray app. First start asks for the
+  one-time code (Devices > Apps > "Windows app jodne ke liye code") and pairs itself; green tray icon = connected; the Settings window picks the
+  project folders the AI tools may use; it can start with Windows (current user, no admin). Files are in `%APPDATA%\JarvisAgent`. `--selftest` checks UI Automation.
+  It is not code-signed, so Windows SmartScreen shows "More info > Run anyway" once.
+- **Android** (`android/`, Kotlin, no libraries; `gradle assembleDebug`): the Jarvis site in a WebView with the phone's own speech recognizer, plus a foreground
+  **phone agent** that long-polls the server like the PC agent. Pair with a code (the Android code in the same card), then grant the permissions on its Settings
+  screen (each one is explained there). Actions: `phone_youtube_play` (finds the first video and opens it in YouTube), `phone_open_url`, `phone_notify`,
+  `phone_status`, `phone_call` (the number comes only from your contact list; needs your tap), `phone_scan_files` / `phone_trash_files` (old screenshots: they are
+  *moved* to `Pictures/Jarvis Trash`, never deleted, and moving needs your tap). Debug-signed APK: allow "install unknown apps" once.
+  Not covered yet: controlling other apps by tapping their screen (an Accessibility service is the next step), and iPhone (Apple does not allow it).
+- The build tools used (JDK 17, Android SDK 34, Gradle 8.7) are in `C:\Users\hp\jarvis-build-tools`; delete that folder to reclaim about 2 GB (building again needs them).
+
 ## Keeping the host's firewall calm (important)
 Hostinger's CDN firewall (`Server: hcdn`) answers with **403 Forbidden** or a **"Checking your browser" page** when one IP sends too many
 requests. Because of that: the PC agent uses a long poll (the server holds each request up to 18 s, about 3 requests a minute),
