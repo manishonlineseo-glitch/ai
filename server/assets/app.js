@@ -274,19 +274,23 @@ async function tick() {
 
 function describe(c) {
   const a = c.args || {};
-  if (c.action.startsWith('claude_')) {
-    return (c.action === 'claude_work' ? 'Claude kaam (files badal sakta hai)' : 'Claude padhai (read-only)') +
+  if (AI_ACTION.test(c.action)) {
+    const [engine, mode] = c.action.split('_');
+    return ENGINE_LABEL[engine] + (mode === 'work' ? ' kaam (files badal sakta hai)' : ' padhai (read-only)') +
       ' · ' + c.device + ' · project ' + a.project + (a.continue ? ' · pichla session jaari' : '') + '\n' + a.prompt;
   }
   const detail = a.url || a.app || a.text || '';
   return c.action + (detail ? ' → ' + detail : '') + ' (' + c.device + ')';
 }
 
-// Finished Claude tasks are announced in the chat (or shown when the chat is next opened).
+const AI_ACTION = /^(claude|gemini|codex)_(read|work)$/;
+const ENGINE_LABEL = { claude: 'Claude', gemini: 'Gemini', codex: 'ChatGPT (Codex)' };
+
+// Finished AI tasks are announced in the chat (or shown when the chat is next opened).
 let finishedSeen = null;
 let missedNotes = [];
 function announceFinished(cmds) {
-  const done = cmds.filter((c) => c.action.startsWith('claude_') && (c.status === 'done' || c.status === 'failed'));
+  const done = cmds.filter((c) => AI_ACTION.test(c.action) && (c.status === 'done' || c.status === 'failed'));
   if (finishedSeen === null) { finishedSeen = new Set(done.map((c) => c.id)); return; } // first load: stay quiet
   for (const c of done.reverse()) {
     if (finishedSeen.has(c.id)) continue;
@@ -301,7 +305,7 @@ function renderPending(cmds, msgs) {
   pendingList = [
     ...cmds.filter((c) => c.status === 'awaiting_confirm').map((c) => ({
       route: 'command_decide', id: c.id, title: 'PC action: approval chahiye', text: describe(c),
-      spoken: c.action.replace('_', ' ') + ' on ' + c.device, danger: ['shutdown', 'restart', 'claude_work'].includes(c.action),
+      spoken: c.action.replace('_', ' ') + ' on ' + c.device, danger: ['shutdown', 'restart'].includes(c.action) || /_work$/.test(c.action),
     })),
     ...msgs.filter((m) => m.status === 'awaiting_confirm').map((m) => ({
       route: 'message_decide', id: m.id, title: 'WhatsApp → ' + m.contact + ': approval chahiye', text: m.body,
@@ -710,7 +714,7 @@ function renderRecent(cmds) {
     const full = c.result_len > 1500;
     return h('div', { class: 'item' },
       h('div', { class: 'grow' }, h('div', { class: 'mono' }, describe(c)),
-        c.result ? (c.action.startsWith('claude_')
+        c.result ? (AI_ACTION.test(c.action)
           ? h('details', { ontoggle: async (e) => {
             if (e.target.open && full) {
               try { body.textContent = (await api('command_result&id=' + c.id)).result; } catch (x) { body.textContent = x.message; }

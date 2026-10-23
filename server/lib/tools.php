@@ -1,7 +1,44 @@
 <?php
 declare(strict_types=1);
 
-const PC_ACTIONS = ['cpu_status', 'speak', 'open_url', 'open_app', 'lock', 'shutdown', 'restart', 'cancel_shutdown', 'claude_read', 'claude_work'];
+const AI_ENGINES = ['claude', 'gemini', 'codex'];
+const PC_ACTIONS = [
+    'cpu_status', 'speak', 'open_url', 'open_app', 'lock', 'shutdown', 'restart', 'cancel_shutdown',
+    'claude_read', 'claude_work', 'gemini_read', 'gemini_work', 'codex_read', 'codex_work',
+];
+
+/** Small, reversible things run on their own; anything that edits files or powers off a PC waits for a tap. */
+const DEFAULT_AUTO_ACTIONS = [
+    'cpu_status', 'speak', 'open_app', 'lock', 'cancel_shutdown', 'claude_read', 'gemini_read', 'codex_read',
+];
+const DEFAULT_AUTO_URL_DOMAINS = [
+    'youtube.com', 'google.com', 'wa.me', 'whatsapp.com', 'github.com', 'claude.ai', 'chatgpt.com', 'gemini.google.com',
+];
+
+function is_ai_action(string $action): bool
+{
+    return (bool) preg_match('/^(claude|gemini|codex)_(read|work)$/', $action);
+}
+
+function needs_approval(string $action, array $args): bool
+{
+    $auto = cfg('no_confirm_actions');
+    if (in_array($action, is_array($auto) ? $auto : DEFAULT_AUTO_ACTIONS, true)) {
+        return false;
+    }
+    if ($action === 'open_url') {
+        $p = parse_url((string) ($args['url'] ?? ''));
+        $host = strtolower((string) ($p['host'] ?? ''));
+        $domains = cfg('auto_url_domains');
+        foreach (is_array($domains) ? $domains : DEFAULT_AUTO_URL_DOMAINS as $d) {
+            // https only, no user:pass@ tricks, exact domain or a real subdomain of it
+            if (($p['scheme'] ?? '') === 'https' && !isset($p['user']) && ($host === $d || str_ends_with($host, '.' . $d))) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
 
 /** Validate and normalise arguments for one PC action; throws on anything odd. */
 function clean_pc_args(string $action, array $in): array
@@ -25,6 +62,10 @@ function clean_pc_args(string $action, array $in): array
             return ['app' => $app];
         case 'claude_read':
         case 'claude_work':
+        case 'gemini_read':
+        case 'gemini_work':
+        case 'codex_read':
+        case 'codex_work':
             $project = trim((string) ($in['project'] ?? ''));
             $prompt = trim((string) ($in['prompt'] ?? ''));
             if (!preg_match('/^[A-Za-z0-9 _.\-]{1,40}$/', $project)) {
@@ -62,7 +103,7 @@ function queue_command(int $userId, string $deviceName, string $action, array $i
         throw new InvalidArgumentException('Is naam ka PC agent nahi mila: ' . $deviceName);
     }
     $args = clean_pc_args($action, $in);
-    $status = in_array($action, cfg('no_confirm_actions') ?? [], true) ? 'pending' : 'awaiting_confirm';
+    $status = needs_approval($action, $args) ? 'awaiting_confirm' : 'pending';
     db()->prepare(
         'INSERT INTO commands (user_id, device_id, action, args, status, created_at, updated_at) VALUES (?,?,?,?,?,?,?)'
     )->execute([$userId, $agent['id'], $action, json_encode($args, JSON_UNESCAPED_UNICODE), $status, time(), time()]);
@@ -183,9 +224,9 @@ function claude_tools(): array
              'url'    => ['type' => 'string', 'description' => 'For open_url'],
              'app'    => ['type' => 'string', 'description' => 'For open_app: a name from the agent\'s allowlist'],
              'text'   => ['type' => 'string', 'description' => 'For speak'],
-             'project'  => ['type' => 'string', 'description' => 'For claude_read/claude_work: project name from the PC agent\'s allowlist'],
-             'prompt'   => ['type' => 'string', 'description' => 'For claude_read/claude_work: the full instruction for Claude Code on that PC'],
-             'continue' => ['type' => 'boolean', 'description' => 'For claude_read/claude_work: continue the previous Claude Code session of that project'],
+             'project'  => ['type' => 'string', 'description' => 'For the *_read/*_work actions: project name from the PC agent\'s allowlist'],
+             'prompt'   => ['type' => 'string', 'description' => 'For the *_read/*_work actions: the full, self-contained instruction for the AI CLI on that PC'],
+             'continue' => ['type' => 'boolean', 'description' => 'For the *_read/*_work actions: continue the previous session of that project'],
          ], 'required' => ['device', 'action']]],
     ];
 }
@@ -256,6 +297,9 @@ function run_tool(string $name, array $in, int $userId): string
                 $q = queue_command($userId, (string) ($in['device'] ?? ''), (string) ($in['action'] ?? ''), $in);
                 if ($q['status'] === 'awaiting_confirm') {
                     return 'Queued as #' . $q['id'] . ' but NOT run yet: it needs the user\'s approval in the app (Pending section).';
+                }
+                if (is_ai_action((string) $in['action'])) {
+                    return 'Started as #' . $q['id'] . ' without needing approval (read-only). It may take minutes; the answer will appear in the chat when it finishes.';
                 }
                 $r = wait_for_command($q['id'], 8);
                 if ($r['status'] === 'done') {

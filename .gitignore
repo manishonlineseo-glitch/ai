@@ -149,3 +149,9 @@ Face-Recognition/samples/
 
 # Python template ignores lib/, but server/lib holds our PHP code
 !server/lib/
+
+# agent local state
+agent/venv/
+agent/state.json
+agent/agent.log
+agent/agent.err.log

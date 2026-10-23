@@ -422,7 +422,7 @@ switch ($route) {
         $pdo->prepare(
             'UPDATE commands SET status = "failed", result = "timeout", updated_at = ?
              WHERE device_id = ? AND status = "running"
-               AND updated_at < CASE WHEN action LIKE "claude\_%" ESCAPE "\" THEN ? ELSE ? END'
+               AND updated_at < CASE WHEN action LIKE "%\_read" ESCAPE "\" OR action LIKE "%\_work" ESCAPE "\" THEN ? ELSE ? END'
         )->execute([time(), $agent['id'], time() - 2400, time() - 120]);
         $pdo->prepare('UPDATE commands SET status = "expired", updated_at = ? WHERE device_id = ? AND status IN ("pending","awaiting_confirm") AND created_at < ?')
             ->execute([time(), $agent['id'], time() - 600]);
@@ -441,7 +441,7 @@ switch ($route) {
         $agent = require_agent();
         $act = $pdo->prepare('SELECT action FROM commands WHERE id = ? AND device_id = ?');
         $act->execute([(int) ($in['id'] ?? 0), $agent['id']]);
-        $limit = str_starts_with((string) $act->fetchColumn(), 'claude_') ? 20000 : 2000;
+        $limit = is_ai_action((string) $act->fetchColumn()) ? 20000 : 2000;
         $st = $pdo->prepare('UPDATE commands SET status = ?, result = ?, updated_at = ? WHERE id = ? AND device_id = ? AND status = "running"');
         $st->execute([
             empty($in['ok']) ? 'failed' : 'done',

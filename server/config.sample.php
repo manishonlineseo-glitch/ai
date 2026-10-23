@@ -16,9 +16,11 @@ return [
     // Required once on the first-run setup page (random string). Empty = anyone can create the owner.
     'setup_key'         => '',
 
-    // PC actions that run without asking you first. Everything else
-    // waits in "Pending" until you tap Approve in the app.
-    'no_confirm_actions' => ['cpu_status', 'speak'],
+    // PC actions that run without asking you first; everything else waits in "Pending" for your tap.
+    // Leave both lines out to use the built-in defaults: small/read-only things run on their own,
+    // *_work (edits files), shutdown, restart and unknown links ask.
+    // 'no_confirm_actions' => ['cpu_status', 'speak', 'open_app', 'lock', 'cancel_shutdown', 'claude_read', 'gemini_read', 'codex_read'],
+    // 'auto_url_domains'   => ['youtube.com', 'google.com', 'wa.me', 'github.com'],   // https links to these open without asking
 
     'chat_rate_per_min' => 20,
 

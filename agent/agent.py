@@ -8,6 +8,7 @@ even if the server asks for it.
 import ctypes
 import json
 import os
+import queue
 import shutil
 import subprocess
 import sys
@@ -22,14 +23,14 @@ import requests
 HERE = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(HERE, "config.json")
 
-ALL_ACTIONS = {"cpu_status", "speak", "open_url", "open_app", "lock", "shutdown", "restart", "cancel_shutdown",
-               "claude_read", "claude_work"}
+ENGINES = ("claude", "gemini", "codex")
+AI_ACTIONS = {f"{e}_{m}" for e in ENGINES for m in ("read", "work")}
+ALL_ACTIONS = {"cpu_status", "speak", "open_url", "open_app", "lock", "shutdown", "restart", "cancel_shutdown"} | AI_ACTIONS
 STATE_PATH = os.path.join(HERE, "state.json")
 
-# Claude Code (headless) profiles. Override any key under "claude" in config.json.
+# Headless AI coding CLIs. Override any key under "claude" / "gemini" / "codex" in config.json.
 CLAUDE_DEFAULTS = {
     "command": "claude",  # or a list with the full path, e.g. ["C:\\Users\\you\\.local\\bin\\claude.exe"]
-    "timeout_minutes": 30,
     "max_turns": 25,
     "max_budget_usd": 2.0,
     "read": {
@@ -44,6 +45,9 @@ CLAUDE_DEFAULTS = {
                     "Bash(php -l *)", "Bash(node --check *)", "Bash(python -m py_compile *)"],
     },
 }
+GEMINI_DEFAULTS = {"command": "gemini", "read": {"approval_mode": "plan"}, "work": {"approval_mode": "auto_edit"}}
+CODEX_DEFAULTS = {"command": "codex", "read": {"sandbox": "read-only"}, "work": {"sandbox": "workspace-write"}}
+DEFAULTS = {"claude": CLAUDE_DEFAULTS, "gemini": GEMINI_DEFAULTS, "codex": CODEX_DEFAULTS}
 
 
 def load_config():
@@ -60,13 +64,16 @@ def load_config():
     cfg["server_url"] = url
     cfg.setdefault("poll_seconds", 4)
     cfg.setdefault("apps", {})  # {"notepad": "C:\\Windows\\notepad.exe"}
-    cfg.setdefault("projects", {})  # {"jarvis": "C:\\xampp\\htdocs\\ai"}: the only folders Claude Code may work in
-    claude = {**CLAUDE_DEFAULTS, **cfg.get("claude", {})}
-    for mode in ("read", "work"):
-        claude[mode] = {**CLAUDE_DEFAULTS[mode], **claude.get(mode, {})}
-    cfg["claude"] = claude
-    # claude_work (can edit files) stays off unless you list it in allowed_actions yourself.
-    cfg["allowed_actions"] = set(cfg.get("allowed_actions", ALL_ACTIONS - {"claude_work"})) & ALL_ACTIONS
+    cfg.setdefault("projects", {})  # {"jarvis": "C:\\xampp\\htdocs\\ai"}: the only folders the AI CLIs may work in
+    cfg.setdefault("ai_timeout_minutes", 30)
+    for engine in ENGINES:
+        merged = {**DEFAULTS[engine], **cfg.get(engine, {})}
+        for mode in ("read", "work"):
+            merged[mode] = {**DEFAULTS[engine][mode], **merged.get(mode, {})}
+        cfg[engine] = merged
+    # *_work (can edit files) stays off unless you list it in allowed_actions yourself.
+    default_allowed = ALL_ACTIONS - {f"{e}_work" for e in ENGINES}
+    cfg["allowed_actions"] = set(cfg.get("allowed_actions", default_allowed)) & ALL_ACTIONS
     return cfg
 
 
@@ -108,17 +115,31 @@ def save_state(state):
     os.replace(tmp, STATE_PATH)
 
 
-def claude_executable(cfg):
-    command = cfg["claude"]["command"]
+# npm installs gemini/codex as .cmd shims; run their JS entry point with node instead, because a .cmd would
+# pass the prompt through cmd.exe where & | > in the text become commands.
+NPM_ENTRY = {
+    "gemini": os.path.join("node_modules", "@google", "gemini-cli", "bundle", "gemini.js"),
+    "codex": os.path.join("node_modules", "@openai", "codex", "bin", "codex.js"),
+}
+
+
+def cli_executable(cfg, engine):
+    command = cfg[engine]["command"]
     if isinstance(command, list):
         return list(command)
     path = shutil.which(command)
+    if not path and engine == "claude":
+        fallback = os.path.join(os.path.expanduser("~"), ".local", "bin", "claude.exe")
+        path = fallback if os.path.exists(fallback) else None
     if not path:
-        raise FileNotFoundError("Claude Code CLI nahi mila. Install karo (claude.ai/install) aur 'claude auth login' chalao, "
-                                "ya config.json me claude.command me poora path do.")
-    if path.lower().endswith((".cmd", ".bat")):
-        # A .cmd shim would pass the prompt through cmd.exe, where & | > in the text become commands.
-        raise PermissionError("claude.cmd (npm) support nahi hai; native claude.exe install karo (claude.ai/install).")
+        raise FileNotFoundError(f"{engine} CLI nahi mila. Install karke login karo, ya config.json me {engine}.command me poora path do.")
+    if path.lower().endswith((".cmd", ".bat", ".ps1")):
+        entry = NPM_ENTRY.get(engine)
+        script = os.path.join(os.path.dirname(path), entry) if entry else None
+        node = shutil.which("node")
+        if script and node and os.path.exists(script):
+            return [node, script]
+        raise PermissionError(f"{engine}: .cmd shim support nahi hai; config.json me {engine}.command ko [node, script] list do.")
     return [path]
 
 
@@ -129,8 +150,59 @@ def kill_tree(proc):
         proc.kill()
 
 
-def run_claude(cfg, mode, args):
-    """Run Claude Code headless in an allow-listed project folder and return its final answer."""
+def build_command(cfg, engine, mode, prompt, path, resume, state_project):
+    """Returns (argv, reader) where reader(stdout, stderr, returncode) -> (answer text, session id or None)."""
+    spec = cfg[engine][mode]
+    exe = cli_executable(cfg, engine)
+
+    if engine == "claude":
+        cmd = exe + ["-p", prompt, "--output-format", "json", "--permission-mode", spec["permission_mode"],
+                     "--tools", spec["tools"], "--max-turns", str(cfg["claude"]["max_turns"]),
+                     "--max-budget-usd", str(cfg["claude"]["max_budget_usd"])]
+        if resume and state_project.get("claude"):
+            cmd += ["--resume", state_project["claude"]]
+        cmd += ["--allowedTools", *spec["allowed"]]  # variadic flag goes last so it can't swallow the prompt
+
+        def read(out, err, code):
+            j = json.loads(out)
+            tail = "\n\n\u2014 claude \u00b7 session {} \u00b7 ${:.2f}".format(str(j.get("session_id", "?"))[:8], float(j.get("total_cost_usd") or 0))
+            if j.get("is_error"):
+                raise RuntimeError(str(j.get("result") or "claude error") + tail)
+            return str(j.get("result") or "(khali jawab)") + tail, j.get("session_id")
+        return cmd, read, None
+
+    if engine == "gemini":
+        cmd = exe + ["-p", prompt, "--output-format", "json", "--approval-mode", spec["approval_mode"]]
+        if resume:
+            cmd += ["--resume", "latest"]  # latest session of this project folder
+
+        def read(out, err, code):
+            j = json.loads(out)
+            if j.get("error"):
+                raise RuntimeError(str(j["error"])[:2000])
+            return str(j.get("response") or "(khali jawab)") + "\n\n\u2014 gemini", None
+        return cmd, read, None
+
+    # codex: the final message is written to a file; -s picks the sandbox, no approvals are ever asked
+    import tempfile
+    fd, last = tempfile.mkstemp(prefix="jarvis_codex_", suffix=".txt")
+    os.close(fd)
+    cmd = exe + ["exec", "-C", path, "-s", spec["sandbox"], "--skip-git-repo-check", "-o", last]
+    if resume:
+        cmd += ["resume", "--last"]
+    cmd += [prompt]
+
+    def read(out, err, code):
+        with open(last, encoding="utf-8", errors="replace") as f:
+            text = f.read().strip()
+        if code != 0 or not text:
+            raise RuntimeError((text or err.strip() or out.strip() or f"exit code {code}")[:2000])
+        return text + "\n\n\u2014 codex", None
+    return cmd, read, last
+
+
+def run_ai(cfg, engine, mode, args):
+    """Run an AI coding CLI headless in an allow-listed project folder and return its final answer."""
     project = str(args.get("project", ""))
     path = cfg["projects"].get(project)
     if not path or not os.path.isdir(path):
@@ -140,38 +212,34 @@ def run_claude(cfg, mode, args):
         raise ValueError("prompt khali hai")
     if prompt.startswith("-"):
         prompt = "Request: " + prompt  # never let the text be parsed as a CLI flag
-    spec = cfg["claude"][mode]
-    state = load_state()
-    cmd = claude_executable(cfg) + [
-        "-p", prompt, "--output-format", "json",
-        "--permission-mode", spec["permission_mode"],
-        "--tools", spec["tools"],
-        "--max-turns", str(cfg["claude"]["max_turns"]),
-        "--max-budget-usd", str(cfg["claude"]["max_budget_usd"]),
-    ]
-    session = state["sessions"].get(project)
-    if args.get("continue") and session:
-        cmd += ["--resume", session]
-    cmd += ["--allowedTools", *spec["allowed"]]  # variadic flag goes last so it can't swallow the prompt
 
-    proc = subprocess.Popen(cmd, cwd=path, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                            text=True, encoding="utf-8", errors="replace")
+    state = load_state()
+    state_project = state["sessions"].get(project, {})
+    if not isinstance(state_project, dict):  # older state.json stored a bare claude session id
+        state_project = {"claude": state_project}
+    cmd, read, temp_file = build_command(cfg, engine, mode, prompt, path, bool(args.get("continue")), state_project)
+
     try:
-        out, err = proc.communicate(timeout=cfg["claude"]["timeout_minutes"] * 60)
-    except subprocess.TimeoutExpired:
-        kill_tree(proc)
-        raise TimeoutError(f"Claude Code {cfg['claude']['timeout_minutes']} minute me khatam nahi hua, roka gaya")
-    try:
-        j = json.loads(out)
-    except ValueError:
-        raise RuntimeError((out.strip() or err.strip() or f"exit code {proc.returncode}")[:3000])
-    if j.get("session_id"):
-        state["sessions"][project] = j["session_id"]
+        proc = subprocess.Popen(cmd, cwd=path, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                text=True, encoding="utf-8", errors="replace")
+        try:
+            out, err = proc.communicate(timeout=cfg["ai_timeout_minutes"] * 60)
+        except subprocess.TimeoutExpired:
+            kill_tree(proc)
+            raise TimeoutError(f"{engine} {cfg['ai_timeout_minutes']} minute me khatam nahi hua, roka gaya")
+        try:
+            text, session = read(out, err, proc.returncode)
+        except ValueError:  # output was not the JSON we expected
+            raise RuntimeError((out.strip() or err.strip() or f"exit code {proc.returncode}")[:3000])
+    finally:
+        if temp_file and os.path.exists(temp_file):
+            os.remove(temp_file)
+
+    if session:
+        state_project[engine] = session
+        state["sessions"][project] = state_project
         save_state(state)
-    footer = "\n\n\u2014 {} \u00b7 session {} \u00b7 ${:.2f}".format(
-        project, str(j.get("session_id", "?"))[:8], float(j.get("total_cost_usd") or 0))
-    text = str(j.get("result") or "(khali jawab)") + footer
-    if j.get("is_error") or proc.returncode != 0:
+    if proc.returncode != 0:
         raise RuntimeError(text)
     return text
 
@@ -179,8 +247,9 @@ def run_claude(cfg, mode, args):
 def run_action(cfg, action, args):
     if action not in cfg["allowed_actions"]:
         raise PermissionError(f"{action} is agent par band hai")
-    if action in ("claude_read", "claude_work"):
-        return run_claude(cfg, action.split("_")[1], args)
+    if action in AI_ACTIONS:
+        engine, mode = action.split("_")
+        return run_ai(cfg, engine, mode, args)
     if action == "cpu_status":
         return cpu_status()
     if action == "speak":
@@ -218,16 +287,13 @@ def main():
     base = cfg["server_url"] + "api.php?r="
     print("Jarvis agent chalu:", cfg["server_url"])
 
-    claude_busy = threading.Event()
+    ai_queue = queue.Queue(maxsize=5)  # AI tasks run one after another; the poll loop (and the online dot) never blocks
 
     def execute(cmd):
         try:
             result, ok = run_action(cfg, cmd["action"], cmd.get("args") or {}), True
         except Exception as e:  # report every failure back to the server
             result, ok = f"{type(e).__name__}: {e}", False
-        finally:
-            if cmd["action"].startswith("claude_"):
-                claude_busy.clear()
         print(("OK  " if ok else "FAIL"), cmd["action"], str(result)[:200], flush=True)
         for _ in range(3):
             try:
@@ -235,6 +301,12 @@ def main():
                 break
             except requests.RequestException:
                 time.sleep(5)
+
+    def ai_worker():
+        while True:
+            execute(ai_queue.get())
+
+    threading.Thread(target=ai_worker, daemon=True).start()
 
     while True:
         try:
@@ -247,14 +319,12 @@ def main():
                 sys.exit("Server ne token reject kiya (block ya delete hua?). Agent band.")
             r.raise_for_status()
             for cmd in r.json().get("commands", []):
-                if cmd["action"].startswith("claude_"):
-                    # Runs in a thread so polling (and the online dot) keeps going during long tasks.
-                    if claude_busy.is_set():
+                if cmd["action"] in AI_ACTIONS:
+                    try:
+                        ai_queue.put_nowait(cmd)
+                    except queue.Full:
                         s.post(base + "agent_result", json={"id": cmd["id"], "ok": False,
-                               "result": "Ek Claude task pehle se chal raha hai, khatam hone ke baad dobara bhejo"}, timeout=15)
-                        continue
-                    claude_busy.set()
-                    threading.Thread(target=execute, args=(cmd,), daemon=True).start()
+                               "result": "Queue bhari hai (5 AI task intezaar me), thodi der baad dobara bhejo"}, timeout=15)
                 else:
                     execute(cmd)
         except requests.RequestException as e:
