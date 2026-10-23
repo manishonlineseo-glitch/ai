@@ -104,7 +104,11 @@ def main():
 
     while True:
         try:
-            r = s.get(base + "agent_poll", timeout=15)
+            params = {"cpu": psutil.cpu_percent(interval=None), "ram": psutil.virtual_memory().percent}
+            battery = psutil.sensors_battery()
+            if battery:
+                params["bat"] = battery.percent
+            r = s.get(base + "agent_poll", params=params, timeout=15)
             if r.status_code == 401:
                 sys.exit("Server ne token reject kiya (block ya delete hua?). Agent band.")
             r.raise_for_status()

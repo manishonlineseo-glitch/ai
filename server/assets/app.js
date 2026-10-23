@@ -23,7 +23,7 @@ function h(tag, props, ...kids) {
     else if (v === true) e.setAttribute(k, '');
     else if (v !== false && v != null) e.setAttribute(k, v);
   }
-  for (const c of kids.flat()) {
+  for (const c of kids.flat(Infinity)) {
     if (c == null || c === false) continue;
     e.append(c.nodeType ? c : document.createTextNode(String(c)));
   }
@@ -220,6 +220,7 @@ function closeSide() {
 
 function renderView() {
   noteHook = null;
+  hud = null;
   devicesBox = recentBox = null;
   document.querySelectorAll('.nav').forEach((b) => b.setAttribute('aria-current', b.dataset.tab === tab ? 'page' : 'false'));
   document.getElementById('title').textContent = TABS.find(([id]) => id === tab)[1];
@@ -240,6 +241,7 @@ async function tick() {
   try {
     const { commands, messages } = await api('commands');
     renderPending(commands, messages || []);
+    refreshHud();
     if (tab === 'devices') { renderRecent(commands); loadDevices(); }
   } catch (x) { if (x.status === 401) boot(); }
 }
@@ -294,6 +296,88 @@ async function decide(route, id, approve) {
     if (approve && route === 'message_decide' && r.result) note('WhatsApp: ' + r.result);
   } catch (x) { note(x.message); }
   tick();
+}
+
+// ---------- command center (status panel above the message box) ----------
+let hud = null; // { el, update(status) } while the chat view is open
+
+function meter(label, value, lowIsBad) {
+  const known = typeof value === 'number';
+  const hot = known && (lowIsBad ? value <= 20 : value >= 85);
+  return h('div', { class: 'meter' },
+    h('div', { class: 'meter-row' }, h('span', null, label), h('span', { class: 'mono' }, known ? Math.round(value) + '%' : '—')),
+    h('div', { class: 'track' }, h('div', { class: 'fill' + (hot ? ' hot' : ''), style: 'width:' + (known ? Math.round(value) : 0) + '%' })));
+}
+
+function hudCard(title, badge, ...body) {
+  return h('section', { class: 'hud-card' },
+    h('header', null, h('span', null, title), badge ? h('span', { class: 'hud-badge' }, badge) : null),
+    body);
+}
+
+function buildHud(actions) {
+  const clock = h('span', { class: 'hud-clock mono' });
+  const state = h('span', { class: 'hud-state' });
+  const grid = h('div', { class: 'hud-grid' });
+  const wave = h('div', { class: 'wave', 'aria-hidden': 'true' }, Array.from({ length: 11 }, (_, i) => h('i', { style: 'animation-delay:' + (i * 0.08) + 's' })));
+  const open = prefs.hud !== false && (prefs.hud === true || (window.innerWidth >= 900 && window.innerHeight >= 700));
+  const wrap = h('div', { class: 'hud' + (open ? '' : ' collapsed') });
+  const toggle = h('button', { class: 'hud-toggle', type: 'button', 'aria-expanded': String(open), onclick: () => {
+    const c = wrap.classList.toggle('collapsed');
+    toggle.setAttribute('aria-expanded', String(!c));
+    prefs.hud = !c;
+    savePrefs();
+  } }, h('span', null, 'COMMAND CENTER'), state, clock);
+  wrap.append(toggle, grid);
+
+  function update(s) {
+    const now = new Date();
+    clock.textContent = now.toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'short' }) + ' · ' + now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const online = s.devices.filter((d) => d.online).length;
+    const ok = s.ai.key_set;
+    state.textContent = ok ? '● ONLINE' : '● AI KEY MISSING';
+    state.className = 'hud-state ' + (ok ? 'good' : 'bad');
+
+    const sys = hudCard('SYSTEM OVERVIEW', s.agents.filter((a) => a.online).length + ' PC ONLINE',
+      s.agents.length
+        ? s.agents.map((a) => h('div', { class: 'agent' + (a.online ? '' : ' off') },
+          h('div', { class: 'agent-name' }, h('span', { class: 'dot' + (a.online ? ' on' : '') }), a.name),
+          a.online ? [meter('CPU', a.cpu), meter('Memory', a.ram), a.battery != null ? meter('Battery', a.battery, true) : null] : h('div', { class: 'muted' }, 'offline')))
+        : h('p', { class: 'muted' }, 'Koi PC agent nahi. Devices tab me jodo.'));
+
+    const dev = hudCard('CONNECTED DEVICES', online + ' ONLINE',
+      h('ul', { class: 'hud-list' }, s.devices.slice(0, 7).map((d) => h('li', null,
+        h('span', { class: 'dot' + (d.online ? ' on' : '') }),
+        h('span', { class: 'grow' }, d.name),
+        h('span', { class: 'tag' }, d.role === 'agent' ? 'PC' : TYPE_LABEL[d.type] || d.type)))));
+
+    const tasks = hudCard('ACTIVE TASKS', s.tasks_open + ' OPEN',
+      s.tasks.length
+        ? h('ul', { class: 'hud-list' }, s.tasks.map((t) => h('li', null,
+          h('input', { type: 'checkbox', class: 'check', 'aria-label': 'Done: ' + t.title, onchange: async () => { await api('task_toggle', { id: t.id, done: true }); refreshHud(); } }),
+          h('span', { class: 'grow' }, t.title))))
+        : h('p', { class: 'muted' }, 'Koi open task nahi.'));
+
+    const core = hudCard('AI CORE', s.pending ? s.pending + ' PENDING' : 'STANDBY',
+      h('dl', { class: 'hud-kv' },
+        h('dt', null, 'Model'), h('dd', { class: 'mono' }, s.ai.model),
+        h('dt', null, 'Claude'), h('dd', { class: s.ai.key_set ? 'good' : 'bad' }, s.ai.key_set ? 'Linked' : 'Key missing'),
+        h('dt', null, 'Voice'), h('dd', { class: SR ? 'good' : 'bad' }, SR ? 'Ready' : 'Browser me nahi'),
+        h('dt', null, 'WhatsApp'), h('dd', null, s.ai.contacts + ' contacts' + (s.ai.whatsapp ? ' · API' : ' · tap mode'))),
+      h('button', { class: 'talk', type: 'button', onclick: actions.talk, disabled: !SR }, wave, h('span', null, 'TALK TO JARVIS')),
+      h('div', { class: 'row wrap hud-actions' },
+        h('button', { class: 'ghost small', type: 'button', onclick: actions.pcStatus }, 'PC status'),
+        h('button', { class: 'ghost small', type: 'button', onclick: actions.newTask }, 'Naya task'),
+        h('button', { class: 'ghost small danger', type: 'button', disabled: !s.pending, onclick: actions.stopAll }, 'Sab pending roko')));
+
+    grid.replaceChildren(sys, dev, tasks, core);
+  }
+  return { el: wrap, update, wave };
+}
+
+async function refreshHud() {
+  if (!hud) return;
+  try { hud.update(await api('status')); } catch (x) { if (x.status === 401) boot(); }
 }
 
 // ---------- chat ----------
@@ -353,12 +437,21 @@ function viewChat(view) {
     }
   });
 
-  mic.addEventListener('click', () => {
+  function talk() {
     if (activeRec) { activeRec.stop(); return; }
     mic.classList.add('live');
+    hud.el.classList.add('listening');
     listen(async (t) => {
       if (!(await tryVoiceDecision(t))) send(t); // "haan"/"nahi" answers a waiting approval, anything else is chat
-    }, () => mic.classList.remove('live'));
+    }, () => { mic.classList.remove('live'); hud.el.classList.remove('listening'); });
+  }
+  mic.addEventListener('click', talk);
+
+  hud = buildHud({
+    talk,
+    pcStatus: () => send('Mere PC ka status batao'),
+    newTask: () => { input.value = 'Task add karo: '; input.focus(); fit(); },
+    stopAll: async () => { for (const p of [...pendingList]) await decide(p.route, p.id, false); note('Sab pending cancel kar diye.'); refreshHud(); },
   });
   spk.addEventListener('click', () => {
     prefs.speak = !prefs.speak;
@@ -376,7 +469,7 @@ function viewChat(view) {
   view.append(
     scroll,
     h('div', { class: 'dock' }, h('div', { class: 'col' },
-      h('div', { id: 'pending' }), form,
+      h('div', { id: 'pending' }), hud.el, form,
       h('p', { class: 'hint' }, 'Risky kaam tabhi hote hain jab aap Approve karo. Mic aapke browser ki voice service se chalta hai.'))));
 
   api('chat_history').then(({ messages }) => {

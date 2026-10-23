@@ -97,6 +97,53 @@ switch ($route) {
         setcookie(DEVICE_COOKIE, '', ['expires' => 1, 'path' => '/']);
         json_out(['ok' => true]);
 
+    // ---------- command center ----------
+    case 'status':
+        $me = require_client();
+        $uid = (int) $me['user_id'];
+        $st = $pdo->prepare(
+            'SELECT id, name, type, role, last_seen, cpu, ram, battery, metrics_at FROM devices
+             WHERE user_id = ? AND blocked = 0 ORDER BY role DESC, id'
+        );
+        $st->execute([$uid]);
+        $devices = [];
+        $agents = [];
+        foreach ($st->fetchAll() as $d) {
+            $online = time() - (int) $d['last_seen'] < 30;
+            $devices[] = ['name' => $d['name'], 'type' => $d['type'], 'role' => $d['role'], 'online' => $online, 'current' => (int) $d['id'] === (int) $me['id']];
+            if ($d['role'] === 'agent') {
+                $fresh = $online && time() - (int) $d['metrics_at'] < 60;
+                $agents[] = [
+                    'name' => $d['name'], 'online' => $online,
+                    'cpu' => $fresh && $d['cpu'] !== null ? (float) $d['cpu'] : null,
+                    'ram' => $fresh && $d['ram'] !== null ? (float) $d['ram'] : null,
+                    'battery' => $fresh && $d['battery'] !== null ? (float) $d['battery'] : null,
+                ];
+            }
+        }
+        $tasks = $pdo->prepare('SELECT id, title FROM tasks WHERE user_id = ? AND done = 0 ORDER BY id DESC LIMIT 5');
+        $tasks->execute([$uid]);
+        $open = $pdo->prepare('SELECT COUNT(*) FROM tasks WHERE user_id = ? AND done = 0');
+        $open->execute([$uid]);
+        $pend = $pdo->prepare(
+            'SELECT (SELECT COUNT(*) FROM commands WHERE user_id = :u AND status = "awaiting_confirm")
+                  + (SELECT COUNT(*) FROM messages_out WHERE user_id = :u AND status = "awaiting_confirm")'
+        );
+        $pend->execute([':u' => $uid]);
+        json_out([
+            'devices'    => $devices,
+            'agents'     => $agents,
+            'tasks'      => $tasks->fetchAll(),
+            'tasks_open' => (int) $open->fetchColumn(),
+            'pending'    => (int) $pend->fetchColumn(),
+            'ai'         => [
+                'model'     => (string) (cfg('model') ?: 'claude-sonnet-5-5'),
+                'key_set'   => (string) cfg('anthropic_api_key') !== '',
+                'whatsapp'  => (string) cfg('whatsapp_token') !== '' && (string) cfg('whatsapp_phone_id') !== '',
+                'contacts'  => count(wa_contacts()),
+            ],
+        ]);
+
     // ---------- devices ----------
     case 'devices':
         $me = require_client();
@@ -239,6 +286,10 @@ switch ($route) {
     // ---------- PC agent side ----------
     case 'agent_poll':
         $agent = require_agent();
+        // Optional live numbers the agent reports with each poll (0-100).
+        $pct = static fn(string $k): ?float => isset($_GET[$k]) && is_numeric($_GET[$k]) ? max(0.0, min(100.0, (float) $_GET[$k])) : null;
+        $pdo->prepare('UPDATE devices SET cpu = ?, ram = ?, battery = ?, metrics_at = ? WHERE id = ?')
+            ->execute([$pct('cpu'), $pct('ram'), $pct('bat'), time(), $agent['id']]);
         $pdo->prepare('UPDATE commands SET status = "failed", result = "timeout", updated_at = ? WHERE device_id = ? AND status = "running" AND updated_at < ?')
             ->execute([time(), $agent['id'], time() - 120]);
         $pdo->prepare('UPDATE commands SET status = "expired", updated_at = ? WHERE device_id = ? AND status IN ("pending","awaiting_confirm") AND created_at < ?')

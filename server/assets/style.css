@@ -122,6 +122,59 @@ a.btn {
 .composer .row { justify-content: space-between; }
 .hint { text-align: center; font-size: .75rem; color: var(--muted); margin: 6px 0 0; }
 
+/* ---------- command center ---------- */
+:root { --hud: #0e7490; --hud-bg: #f1f7f9; }
+@media (prefers-color-scheme: dark) { :root { --hud: #22d3ee; --hud-bg: #1b2326; } }
+.dock .col { max-width: 1000px; }
+.dock #pending, .dock .composer, .dock .hint { max-width: 740px; margin-left: auto; margin-right: auto; }
+.hud { margin-bottom: 10px; border: 1px solid var(--line); border-radius: 16px; background: var(--surface); overflow: hidden; }
+.hud-toggle {
+  display: flex; width: 100%; align-items: center; gap: 12px; background: transparent; color: var(--hud); border: 0; border-radius: 0;
+  padding: 8px 14px; min-height: 40px; font-size: .75rem; letter-spacing: .14em; font-weight: 700; text-align: left;
+}
+.hud-toggle .hud-clock { margin-left: auto; color: var(--muted); letter-spacing: 0; font-weight: 500; }
+.hud-state { letter-spacing: .06em; font-weight: 600; }
+.hud-state.good, dd.good { color: var(--ok); } .hud-state.bad, dd.bad { color: var(--danger); }
+.hud.collapsed .hud-grid { display: none; }
+.hud-grid {
+  display: grid; gap: 10px; padding: 0 10px 10px; max-height: 46vh; overflow-y: auto;
+  grid-template-columns: repeat(auto-fit, minmax(225px, 1fr));
+}
+.hud-card { background: var(--hud-bg); border: 1px solid var(--line); border-top: 2px solid var(--hud); border-radius: 12px; padding: 10px 12px; min-width: 0; }
+.hud-card header { display: flex; justify-content: space-between; gap: 6px; font-size: .68rem; letter-spacing: .14em; color: var(--muted); font-weight: 700; margin-bottom: 8px; }
+.hud-badge { color: var(--hud); }
+.hud-list { list-style: none; margin: 0; padding: 0; }
+.hud-list li { display: flex; align-items: center; gap: 8px; padding: 5px 0; font-size: .88rem; }
+.hud-list .grow { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.agent { margin-bottom: 8px; } .agent.off { opacity: .6; }
+.agent-name { display: flex; align-items: center; gap: 8px; font-weight: 600; font-size: .9rem; margin-bottom: 4px; }
+.meter { margin: 4px 0; font-size: .8rem; }
+.meter-row { display: flex; justify-content: space-between; color: var(--muted); }
+.track { height: 5px; border-radius: 3px; background: var(--line); overflow: hidden; margin-top: 2px; }
+.fill { height: 100%; background: var(--hud); transition: width .4s; }
+.fill.hot { background: var(--danger); }
+.hud-kv { display: grid; grid-template-columns: auto 1fr; gap: 3px 12px; margin: 0 0 10px; font-size: .85rem; }
+.hud-kv dt { color: var(--muted); } .hud-kv dd { margin: 0; text-align: right; }
+.talk {
+  display: flex; align-items: center; justify-content: center; gap: 10px; width: 100%; background: transparent; color: var(--hud);
+  border: 1px solid var(--hud); border-radius: 999px; font-size: .78rem; letter-spacing: .12em; margin-bottom: 8px;
+}
+.talk:hover:not(:disabled) { background: var(--hud); color: var(--bg); }
+.wave { display: inline-flex; align-items: center; gap: 2px; height: 20px; }
+.wave i { width: 2px; height: 5px; background: currentColor; border-radius: 1px; }
+.hud.listening .wave i { animation: eq .8s ease-in-out infinite; }
+@keyframes eq { 0%, 100% { height: 4px; } 50% { height: 18px; } }
+.hud-actions { gap: 6px; }
+button.danger { color: var(--danger); border-color: var(--danger); }
+@media (max-width: 640px) {
+  /* phone: swipe sideways through the cards so the chat keeps its space */
+  .hud-grid {
+    grid-auto-flow: column; grid-template-columns: none; grid-auto-columns: 84%;
+    overflow-x: auto; overflow-y: hidden; max-height: none; scroll-snap-type: x mandatory;
+  }
+  .hud-card { scroll-snap-align: start; max-height: 30vh; overflow-y: auto; }
+}
+
 /* ---------- lists ---------- */
 .item { display: flex; align-items: center; gap: 10px; padding: 12px 0; border-bottom: 1px solid var(--line); }
 .item:last-child { border-bottom: 0; }
