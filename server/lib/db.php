@@ -1,7 +1,7 @@
 <?php
 declare(strict_types=1);
 
-const SCHEMA_VERSION = 6;
+const SCHEMA_VERSION = 7;
 
 function cfg(?string $key = null)
 {
@@ -77,6 +77,10 @@ function migrate(PDO $pdo): void
         }
     }
     $pdo->exec('UPDATE tasks SET status = "done" WHERE done = 1 AND status = "todo"');
+    $havePair = array_column($pdo->query('PRAGMA table_info(pair_codes)')->fetchAll(), 'name');
+    if (!in_array('role', $havePair, true)) {
+        $pdo->exec('ALTER TABLE pair_codes ADD COLUMN role TEXT NOT NULL DEFAULT "client"');
+    }
     $haveCmd = array_column($pdo->query('PRAGMA table_info(commands)')->fetchAll(), 'name');
     if (!in_array('final', $haveCmd, true)) {
         $pdo->exec('ALTER TABLE commands ADD COLUMN final TEXT');

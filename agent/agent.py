@@ -21,13 +21,14 @@ import psutil
 import requests
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-CONFIG_PATH = os.path.join(HERE, "config.json")
+DATA_DIR = os.environ.get("JARVIS_AGENT_HOME") or HERE
+CONFIG_PATH = os.path.join(DATA_DIR, "config.json")
 
 ENGINES = ("claude", "gemini", "codex")
 AI_ACTIONS = {f"{e}_{m}" for e in ENGINES for m in ("read", "work")}
 ALL_ACTIONS = {"cpu_status", "speak", "open_url", "open_app", "lock", "shutdown", "restart", "cancel_shutdown",
                "brain_chat", "screen_look", "claude_sessions", "window_read", "web_research"} | AI_ACTIONS
-STATE_PATH = os.path.join(HERE, "state.json")
+STATE_PATH = os.path.join(DATA_DIR, "state.json")
 
 # Headless AI coding CLIs. Override any key under "claude" / "gemini" / "codex" in config.json.
 CLAUDE_DEFAULTS = {
@@ -202,7 +203,7 @@ def build_command(cfg, engine, mode, prompt, path, resume, state_project):
     return cmd, read, last
 
 
-BRAIN_DIR = os.path.join(HERE, "brain_workdir")  # empty folder: the brain must have nothing to read or edit
+BRAIN_DIR = os.path.join(DATA_DIR, "brain_workdir")  # empty folder: the brain must have nothing to read or edit
 
 
 def run_brain(cfg, args):
@@ -622,14 +623,14 @@ def run_action(cfg, action, args):
     raise ValueError("unknown action")
 
 
-def main():
-    for stream in (sys.stdout, sys.stderr):
-        stream.reconfigure(errors="replace")  # a console that cannot show a character must not crash result reporting
-    cfg = load_config()
+def run(cfg, stop=None, on_status=None):
+    """The agent loop. `stop` (a threading.Event) ends it; `on_status("online"|"offline"|"blocked"|"rejected")` reports its state."""
+    stop = stop or threading.Event()
+    status = on_status or (lambda state: None)
     s = requests.Session()
     s.headers.update({"X-Agent-Token": cfg["token"], "X-Requested-With": "jarvis", "User-Agent": "JarvisAgent/1.0"})
     base = cfg["server_url"] + "api.php?r="
-    print("Jarvis agent chalu:", cfg["server_url"])
+    print("Jarvis agent chalu:", cfg["server_url"], flush=True)
 
     ai_queue = queue.Queue(maxsize=5)  # AI tasks run one after another; the poll loop (and the online dot) never blocks
 
@@ -644,19 +645,22 @@ def main():
                 s.post(base + "agent_result", json={"id": cmd["id"], "ok": ok, "result": result}, timeout=30)
                 break
             except requests.RequestException:
-                time.sleep(5)
+                stop.wait(5)
 
     brain_queue = queue.Queue(maxsize=3)  # chat turns get their own lane so a long coding task never blocks them
 
     def make_worker(q):
         def worker():
-            while True:
-                execute(q.get())
+            while not stop.is_set():
+                try:
+                    cmd = q.get(timeout=1)
+                except queue.Empty:
+                    continue
+                execute(cmd)
         return worker
 
     def ticker():
-        while True:
-            time.sleep(120)
+        while not stop.wait(120):
             try:
                 s.get(base + "tick", timeout=170)  # the server may run a news summary or report during this call
             except requests.RequestException:
@@ -666,7 +670,7 @@ def main():
     threading.Thread(target=make_worker(ai_queue), daemon=True).start()
     threading.Thread(target=make_worker(brain_queue), daemon=True).start()
 
-    while True:
+    while not stop.is_set():
         try:
             params = {"cpu": psutil.cpu_percent(interval=None), "ram": psutil.virtual_memory().percent,
                       "projects": ",".join(cfg["projects"].keys())}
@@ -676,13 +680,17 @@ def main():
             params["wait"] = 18
             r = s.get(base + "agent_poll", params=params, timeout=40)
             if r.status_code == 401:
-                sys.exit("Server ne token reject kiya (block ya delete hua?). Agent band.")
+                status("rejected")
+                print("Server ne token reject kiya (block ya delete hua?). Agent band.", flush=True)
+                return
             if r.status_code in (403, 429, 503) or "json" not in r.headers.get("Content-Type", ""):
                 # the host's firewall asked for a pause or sent a "checking your browser" page: back off instead of hammering it
+                status("blocked")
                 print(f"server ne roka (HTTP {r.status_code}); 2 minute ruk raha hoon", flush=True)
-                time.sleep(120)
+                stop.wait(120)
                 continue
             r.raise_for_status()
+            status("online")
             for cmd in r.json().get("commands", []):
                 if cmd["action"] in AI_ACTIONS or cmd["action"] in ("brain_chat", "screen_look", "window_read", "claude_sessions", "web_research"):
                     try:
@@ -693,9 +701,17 @@ def main():
                 else:
                     execute(cmd)
         except requests.RequestException as e:
+            status("offline")
             print("network issue:", e, flush=True)
-            time.sleep(10)
-        time.sleep(cfg["poll_seconds"])
+            stop.wait(10)
+        stop.wait(cfg["poll_seconds"])
+
+
+def main():
+    for stream in (sys.stdout, sys.stderr):
+        if stream is not None:
+            stream.reconfigure(errors="replace")  # a console that cannot show a character must not crash result reporting
+    run(load_config())
 
 
 if __name__ == "__main__":

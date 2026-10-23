@@ -6,7 +6,11 @@ const PC_ACTIONS = [
     'cpu_status', 'speak', 'open_url', 'open_app', 'lock', 'shutdown', 'restart', 'cancel_shutdown',
     'claude_read', 'claude_work', 'gemini_read', 'gemini_work', 'codex_read', 'codex_work',
     'screen_look', 'claude_sessions', 'window_read', 'web_research',
+    // run on the Android app (a device of type android), not on a PC
+    'phone_status', 'phone_notify', 'phone_open_url', 'phone_youtube_play', 'phone_call', 'phone_scan_files', 'phone_trash_files',
 ];
+
+const PHONE_AGENT_ACTIONS = ['phone_status', 'phone_notify', 'phone_open_url', 'phone_youtube_play', 'phone_call', 'phone_scan_files', 'phone_trash_files'];
 
 /** Small, reversible things run on their own; anything that edits files or powers off a PC waits for a tap. */
 const DEFAULT_AUTO_ACTIONS = [
@@ -15,6 +19,8 @@ const DEFAULT_AUTO_ACTIONS = [
     'claude_sessions', // reads the laptop's own Claude Code session records, no AI involved
     'window_read', // copies a window's text (no screenshot) and has the owner's own AI explain it
     'web_research', // read-only: a web-searching AI in an empty folder, no files or shell
+    'phone_status', 'phone_notify', 'phone_youtube_play', 'phone_scan_files', // harmless: report, notify, play a song, list files
+    // phone_call and phone_trash_files always wait for a tap; phone_open_url only opens known sites without asking
 ];
 const DEFAULT_AUTO_URL_DOMAINS = [
     'youtube.com', 'google.com', 'wa.me', 'whatsapp.com', 'github.com', 'claude.ai', 'chatgpt.com', 'gemini.google.com',
@@ -54,7 +60,7 @@ function needs_approval(string $action, array $args): bool
     if (in_array($action, is_array($auto) ? $auto : DEFAULT_AUTO_ACTIONS, true)) {
         return false;
     }
-    if ($action === 'open_url') {
+    if ($action === 'open_url' || $action === 'phone_open_url') {
         $p = parse_url((string) ($args['url'] ?? ''));
         $host = strtolower((string) ($p['host'] ?? ''));
         $domains = cfg('auto_url_domains');
@@ -106,6 +112,38 @@ function clean_pc_args(string $action, array $in): array
                 throw new InvalidArgumentException('prompt 1-4000 akshar ka chahiye');
             }
             return ['project' => $project, 'prompt' => $prompt, 'continue' => !empty($in['continue'])];
+        case 'phone_open_url':
+            $url = trim((string) ($in['url'] ?? ''));
+            $p = parse_url($url);
+            if (!$p || !in_array(strtolower($p['scheme'] ?? ''), ['http', 'https'], true) || empty($p['host']) || strlen($url) > 500) {
+                throw new InvalidArgumentException('url http(s) wala hona chahiye');
+            }
+            return ['url' => $url];
+        case 'phone_youtube_play':
+            $query = trim((string) ($in['query'] ?? ''));
+            if ($query === '' || mb_strlen($query) > 200) {
+                throw new InvalidArgumentException('query 1-200 akshar ka chahiye');
+            }
+            return ['query' => $query];
+        case 'phone_notify':
+            $text = trim((string) ($in['text'] ?? ''));
+            if ($text === '' || mb_strlen($text) > 300) {
+                throw new InvalidArgumentException('text 1-300 akshar ka chahiye');
+            }
+            return ['text' => $text];
+        case 'phone_call':
+            // the number never comes from the model: only a contact name from the allow-list, resolved here
+            $contacts = wa_contacts();
+            $key = strtolower(trim((string) ($in['contact'] ?? '')));
+            if (!isset($contacts[$key])) {
+                throw new InvalidArgumentException('Ye contact allowed list me nahi hai. Available: ' . (implode(', ', array_keys($contacts)) ?: 'koi nahi'));
+            }
+            return ['contact' => $key, 'number' => '+' . $contacts[$key]];
+        case 'phone_scan_files':
+        case 'phone_trash_files':
+            return ['kind' => 'screenshots', 'older_than_days' => min(max((int) ($in['older_than_days'] ?? 30), 1), 3650)];
+        case 'phone_status':
+            return [];
         case 'web_research':
             $question = trim((string) ($in['question'] ?? ''));
             if ($question === '' || mb_strlen($question) > 4000) {
@@ -158,6 +196,10 @@ function queue_command(int $userId, string $deviceName, string $action, array $i
     $agent = find_agent($userId, $deviceName);
     if (!$agent) {
         throw new InvalidArgumentException('Is naam ka PC agent nahi mila: ' . $deviceName);
+    }
+    $isPhone = ($agent['type'] ?? '') === 'android';
+    if (in_array($action, PHONE_AGENT_ACTIONS, true) !== $isPhone) {
+        throw new InvalidArgumentException($isPhone ? 'Ye action phone par nahi chalta, PC agent ko bhejo' : 'Ye phone ka action hai, phone agent ko bhejo');
     }
     $args = clean_pc_args($action, $in);
     $status = needs_approval($action, $args) ? 'awaiting_confirm' : 'pending';
@@ -294,6 +336,10 @@ function claude_tools(): array
              'app'    => ['type' => 'string', 'description' => 'For open_app: a name from the agent\'s allowlist'],
              'text'   => ['type' => 'string', 'description' => 'For speak'],
              'question' => ['type' => 'string', 'description' => 'For web_research: what to research on the web (also for screen_look: what to find out)'],
+             'number'   => ['type' => 'string', 'description' => 'never set this yourself'],
+             'older_than_days' => ['type' => 'integer', 'description' => 'For phone_scan_files/phone_trash_files: only screenshots older than this (default 30)'],
+             'query'    => ['type' => 'string', 'description' => 'For phone_youtube_play: song/video to search and play'],
+             'contact'  => ['type' => 'string', 'description' => 'For phone_call: contact name from the allowed list'],
              'hours'    => ['type' => 'integer', 'description' => 'For claude_sessions: how many past hours to include (default 24)'],
              'question' => ['type' => 'string', 'description' => 'For screen_look: what to find out from the screenshot (optional)'],
              'window'   => ['type' => 'string', 'description' => 'For screen_look/window_read: part of a window title (e.g. "Claude") to bring to the front before the screenshot (optional)'],

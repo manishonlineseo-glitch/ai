@@ -90,11 +90,23 @@ function speak(text) {
 }
 
 // ---------- voice ----------
-const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+// In the Android app the page uses the phone's own speech recognizer through window.JarvisNative (a WebView has no
+// webkitSpeechRecognition); in a normal browser it uses the browser's.
+const NATIVE = !!(window.JarvisNative && JarvisNative.available && JarvisNative.available());
+const SR = NATIVE ? true : (window.SpeechRecognition || window.webkitSpeechRecognition);
 let activeRec = null;
 
 function listen(onText, onEnd) {
   if (!SR) return null;
+  if (NATIVE) {
+    let done = false;
+    const finish = () => { if (done) return; done = true; activeRec = null; onEnd(); };
+    window.onNativeSpeech = (text) => { onText(text); finish(); };
+    window.onNativeSpeechEnd = finish;
+    activeRec = { stop: () => JarvisNative.stop() };
+    JarvisNative.listen(prefs.lang);
+    return activeRec;
+  }
   const r = new SR();
   r.lang = prefs.lang;
   r.interimResults = false;
@@ -841,9 +853,10 @@ function viewDevices(view) {
     h('div', { class: 'card' },
       h('p', { class: 'muted' }, 'Phone/TV par password type karne ki jagah ek baar ka code use karo.'),
       pairForm, pairOut),
-    h('h2', null, 'PC agent jodo (sirf us laptop/desktop ke liye jise control karna hai)'),
+    h('h2', null, 'Apps (download karke install karo)'), appsCard(),
+    h('h2', null, 'PC agent jodo (purana tareeka: token)'),
     h('div', { class: 'card' },
-      h('p', { class: 'muted' }, 'Jis laptop/desktop ko control karna hai, uska ek token banao. Token sirf ek baar dikhega.'),
+      h('p', { class: 'muted' }, 'Windows app ho to upar wala code use karo. Ye sirf manual agent.py ke liye hai. Token sirf ek baar dikhega.'),
       h('form', { class: 'row', onsubmit: async (e) => {
         e.preventDefault();
         err.textContent = '';
@@ -927,6 +940,48 @@ function viewSkills(view) {
     h('p', { class: 'muted' }, 'Jarvis har kaam Gemini (teacher) se samajhta hai aur yaad rakhta hai. Jo baat wo pakki seekh leta hai, usme agli baar AI ki zarurat nahi padti, aur wo turant hota hai. Naye ya lambe sawal ab bhi AI se jaate hain. Approval ke niyam skills par bhi pehle jaise hi lagte hain.'),
     stats, h('h2', null, 'Seekhi hui baatein'), list, err);
   load().catch((x) => { err.textContent = x.message; });
+}
+
+// ---------- downloadable apps ----------
+function appsCard() {
+  const files = h('div');
+  const codeOut = h('div');
+  const err = h('div', { class: 'error', role: 'alert' });
+  const name = h('input', { value: 'Laptop-PC', maxlength: 40, 'aria-label': 'PC ka naam' });
+  const phoneName = h('input', { value: 'Phone', maxlength: 40, 'aria-label': 'Phone ka naam' });
+  const phoneOut = h('div');
+
+  api('downloads').then(({ files: fs }) => {
+    files.replaceChildren(...(fs.length ? fs.map((f) => h('div', { class: 'item' },
+      h('div', { class: 'grow' }, h('div', null, f.label), h('div', { class: 'muted' }, (f.size / 1048576).toFixed(1) + ' MB · ' + fmtTime(f.date))),
+      h('a', { class: 'btn', href: 'api.php?r=download&file=' + encodeURIComponent(f.file), download: f.file }, 'Download'))) :
+      [h('p', { class: 'muted' }, 'Abhi koi app upload nahi hui.')]));
+  }).catch((x) => { files.textContent = x.message; });
+
+  return h('div', { class: 'card' },
+    files,
+    h('h2', null, 'Windows app jodne ke liye code'),
+    h('p', { class: 'muted' }, 'Windows app kholo, ye code daalo. Code 15 minute me ek hi baar chalta hai.'),
+    h('form', { class: 'row', onsubmit: async (e) => {
+      e.preventDefault();
+      err.textContent = '';
+      try {
+        const r = await api('pair_create', { name: name.value, type: 'laptop', role: 'agent' });
+        codeOut.replaceChildren(h('div', { class: 'pair-code mono' }, r.code));
+      } catch (x) { err.textContent = x.message; }
+    } }, name, h('button', { type: 'submit' }, 'Code banao')),
+    err, codeOut,
+    h('h2', null, 'Android app jodne ke liye code'),
+    h('p', { class: 'muted' }, 'APK download karke install karo, app kholo aur ye code daalo. App phone ko Jarvis ka agent bana deti hai (YouTube, call, files).'),
+    h('form', { class: 'row', onsubmit: async (e) => {
+      e.preventDefault();
+      err.textContent = '';
+      try {
+        const r = await api('pair_create', { name: phoneName.value, type: 'android', role: 'agent' });
+        phoneOut.replaceChildren(h('div', { class: 'pair-code mono' }, r.code));
+      } catch (x) { err.textContent = x.message; }
+    } }, phoneName, h('button', { type: 'submit' }, 'Code banao')),
+    phoneOut);
 }
 
 // ---------- boot ----------

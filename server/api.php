@@ -41,6 +41,13 @@ function device_type(mixed $t): string
     return in_array($t, DEVICE_TYPES, true) ? $t : 'other';
 }
 
+const DOWNLOAD_FILES = ['JarvisAgent.exe' => 'Windows app (laptop/PC)', 'Jarvis.apk' => 'Android app'];
+
+function downloads_dir(): string
+{
+    return (string) (cfg('downloads_dir') ?: dirname((string) cfg('db_path')) . '/downloads');
+}
+
 function status_payload(array $me): array
 {
     $pdo = db();
@@ -170,7 +177,7 @@ switch ($route) {
         if (too_many_failures()) {
             fail('Bahut galat koshishen. 15 minute baad try karo.', 429);
         }
-        $st = $pdo->prepare('SELECT id, user_id, name, type FROM pair_codes WHERE code_hash = ? AND expires_at > ?');
+        $st = $pdo->prepare('SELECT id, user_id, name, type FROM pair_codes WHERE code_hash = ? AND expires_at > ? AND role = "client"');
         $st->execute([pair_code_hash((string) ($in['code'] ?? '')), time()]);
         $pc = db_fetch($st);
         $used = false;
@@ -186,6 +193,51 @@ switch ($route) {
         set_device_cookie(create_device((int) $pc['user_id'], $pc['name'], device_type($pc['type']), 'client'));
         json_out(['ok' => true]);
 
+    // The Windows app trades a one-time code for its own agent token (no JSON editing, no password).
+    case 'agent_pair':
+        if (too_many_failures()) {
+            fail('Bahut galat koshishen. 15 minute baad try karo.', 429);
+        }
+        $st = $pdo->prepare('SELECT id, user_id, name, type FROM pair_codes WHERE code_hash = ? AND expires_at > ? AND role = "agent"');
+        $st->execute([pair_code_hash((string) ($in['code'] ?? '')), time()]);
+        $pc = db_fetch($st);
+        $used = false;
+        if ($pc) {
+            $del = $pdo->prepare('DELETE FROM pair_codes WHERE id = ?');
+            $del->execute([$pc['id']]);
+            $used = $del->rowCount() === 1;
+        }
+        if (!$used) {
+            record_failure();
+            fail('Code galat hai ya expire ho gaya', 401);
+        }
+        json_out(['token' => create_device((int) $pc['user_id'], $pc['name'], $pc['type'] === 'android' ? 'android' : 'laptop', 'agent'), 'name' => $pc['name']]);
+
+    case 'downloads':
+        $me = require_client();
+        $dir = downloads_dir();
+        $files = [];
+        foreach (DOWNLOAD_FILES as $f => $label) {
+            if (is_file($dir . '/' . $f)) {
+                $files[] = ['file' => $f, 'label' => $label, 'size' => filesize($dir . '/' . $f), 'date' => filemtime($dir . '/' . $f)];
+            }
+        }
+        json_out(['files' => $files]);
+
+    case 'download': // apps are served only to a logged-in device, never from a public URL
+        $me = require_client();
+        $f = (string) ($_GET['file'] ?? '');
+        $path = downloads_dir() . '/' . $f;
+        if (!isset(DOWNLOAD_FILES[$f]) || !is_file($path)) {
+            fail('File nahi mili', 404);
+        }
+        header('Content-Type: application/octet-stream');
+        header('Content-Length: ' . filesize($path));
+        header('Content-Disposition: attachment; filename="' . $f . '"');
+        header('Cache-Control: no-store');
+        readfile($path);
+        exit;
+
     case 'pair_create':
         $me = require_client();
         $name = clean_device_name($in['name'] ?? '');
@@ -200,8 +252,8 @@ switch ($route) {
         for ($i = 0; $i < 8; $i++) {
             $code .= $alphabet[random_int(0, strlen($alphabet) - 1)];
         }
-        $pdo->prepare('INSERT INTO pair_codes (user_id, code_hash, name, type, expires_at) VALUES (?,?,?,?,?)')
-            ->execute([$me['user_id'], pair_code_hash($code), $name, device_type($in['type'] ?? ''), time() + 900]);
+        $pdo->prepare('INSERT INTO pair_codes (user_id, code_hash, name, type, expires_at, role) VALUES (?,?,?,?,?,?)')
+            ->execute([$me['user_id'], pair_code_hash($code), $name, device_type($in['type'] ?? ''), time() + 900, ($in['role'] ?? '') === 'agent' ? 'agent' : 'client']);
         json_out(['code' => substr($code, 0, 4) . '-' . substr($code, 4), 'expires_in' => 900, 'name' => $name]);
 
     case 'logout':

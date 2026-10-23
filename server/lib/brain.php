@@ -104,6 +104,15 @@ function brain_tool_lines(): string
     return implode("\n", $lines);
 }
 
+/** Name of the Android app device that is online right now, if any. */
+function brain_phone_agent(int $userId): ?string
+{
+    $st = db()->prepare('SELECT name FROM devices WHERE user_id = ? AND role = "agent" AND type = "android" AND blocked = 0 AND last_seen > ? ORDER BY last_seen DESC LIMIT 1');
+    $st->execute([$userId, time() - 60]);
+    $row = db_fetch($st);
+    return $row ? $row['name'] : null;
+}
+
 function brain_prompt(int $userId, string $text, ?array $agent): string
 {
     $pdo = db();
@@ -129,6 +138,7 @@ function brain_prompt(int $userId, string $text, ?array $agent): string
         'recent_notes'     => $notes,
         'contacts'         => array_keys(wa_contacts()),
         'pc_agent'         => $agent ? $agent['name'] : null,
+        'phone_agent'      => brain_phone_agent($userId),
         'pc_projects'      => $projects ?: [],
         'default_engine'   => brain_engine(),
         'engines_logged_in' => engines_ready(), // only these can run; \"Claude\" in the user's words may mean the app, not the engine
@@ -146,6 +156,8 @@ function brain_prompt(int $userId, string $text, ?array $agent): string
         . "- PC work: pc_command with device = pc_agent. Read-only: claude_read/gemini_read/codex_read; file edits: *_work (the user must tap). "
         . "Engine = default_engine unless the user asks for another AI that is in engines_logged_in (\"Claude\" may just name an app). project must be in pc_projects. "
         . "Write complete prompts. Results arrive in chat later: just say it was started.\n"
+        . "- Phone (when phone_agent is set): pc_command with device = phone_agent. phone_youtube_play (plays the first match), phone_open_url, phone_notify, phone_status, phone_call(contact), "
+        . "phone_scan_files (lists old screenshots) then phone_trash_files (moves them to a trash folder, user must tap). If phone_agent is null use phone_action buttons instead.\n"
         . "- Text written in a window (no screenshot): pc_command window_read (window = part of the title like \"Claude\", question). "
         . "Claude Code progress / \"kaun se sessions chal rahe hain\": claude_sessions (exact, fast). Only for visuals: screen_look.\n"
         . "- Tasks: add_task (assignee jarvis = Jarvis does it: news summary, web research, post drafts, plan). \"aaj kya task hai / kya complete hua\": answer from task_board. "
