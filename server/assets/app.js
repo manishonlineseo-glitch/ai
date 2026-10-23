@@ -180,9 +180,15 @@ function viewChat(panel) {
     const wait = h('div', { class: 'msg assistant muted' }, '…');
     log.append(wait);
     try {
-      const { reply } = await api('chat', { text });
+      const { reply, actions } = await api('chat', { text });
       wait.remove();
       add('assistant', reply);
+      for (const a of actions || []) {
+        // Only these schemes; a real tap on the link is the user's approval.
+        if (!/^(tel:|whatsapp:|https:\/\/(wa\.me|www\.youtube\.com|www\.google\.com)\/)/.test(a.url)) continue;
+        log.append(h('a', { class: 'btn', href: a.url, rel: 'noopener noreferrer' }, a.label));
+      }
+      log.scrollTop = log.scrollHeight;
       if (speakBox.checked && 'speechSynthesis' in window) {
         const u = new SpeechSynthesisUtterance(reply);
         u.lang = lang.value;

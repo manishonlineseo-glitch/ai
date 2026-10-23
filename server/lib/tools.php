@@ -72,9 +72,76 @@ function wait_for_command(int $id, int $seconds): array
     return ['status' => 'pending', 'result' => null];
 }
 
+const PHONE_ACTIONS = ['call', 'whatsapp_chat', 'open_whatsapp', 'youtube_search', 'open_youtube', 'maps_search'];
+
+/** Buttons to show on the device the user is talking to (collected during one chat turn). */
+function ui_actions(?array $add = null): array
+{
+    static $list = [];
+    if ($add !== null) {
+        $list[] = $add;
+    }
+    return $list;
+}
+
+/** Builds a tap-to-open link. The tap on the user's own device is the approval. */
+function phone_action(string $action, array $in): string
+{
+    if (!in_array($action, PHONE_ACTIONS, true)) {
+        throw new InvalidArgumentException('Unknown phone action');
+    }
+    $contact = static function () use ($in): array {
+        $contacts = wa_contacts();
+        $key = strtolower(trim((string) ($in['contact'] ?? '')));
+        if (!isset($contacts[$key])) {
+            throw new InvalidArgumentException('Ye contact allowed list me nahi hai. Available: ' . (implode(', ', array_keys($contacts)) ?: 'koi nahi'));
+        }
+        return [$key, $contacts[$key]];
+    };
+    $query = trim((string) ($in['query'] ?? ''));
+    if (in_array($action, ['youtube_search', 'maps_search'], true) && ($query === '' || mb_strlen($query) > 200)) {
+        throw new InvalidArgumentException('query 1-200 akshar ka chahiye');
+    }
+
+    switch ($action) {
+        case 'call':
+            [$name, $num] = $contact();
+            ui_actions(['label' => 'Call ' . $name, 'url' => 'tel:+' . $num]);
+            return 'Tap button "Call ' . $name . '" is shown to the user. Nothing has been dialled yet.';
+        case 'whatsapp_chat':
+            [$name, $num] = $contact();
+            $text = trim((string) ($in['text'] ?? ''));
+            $url = 'https://wa.me/' . $num . ($text !== '' ? '?text=' . rawurlencode(mb_substr($text, 0, 1000)) : '');
+            ui_actions(['label' => 'WhatsApp ' . $name, 'url' => $url]);
+            return 'Tap button "WhatsApp ' . $name . '" is shown; it opens the chat' . ($text !== '' ? ' with the text pre-filled' : '') . ' and the user presses send themselves.';
+        case 'open_whatsapp':
+            ui_actions(['label' => 'Open WhatsApp', 'url' => 'whatsapp://']);
+            return 'Tap button "Open WhatsApp" is shown to the user.';
+        case 'youtube_search':
+            ui_actions(['label' => 'YouTube: ' . $query, 'url' => 'https://www.youtube.com/results?search_query=' . rawurlencode($query)]);
+            return 'Tap button for the YouTube search is shown. It lists results; it cannot auto-play.';
+        case 'open_youtube':
+            ui_actions(['label' => 'Open YouTube', 'url' => 'https://www.youtube.com/']);
+            return 'Tap button "Open YouTube" is shown to the user.';
+        default: // maps_search
+            ui_actions(['label' => 'Maps: ' . $query, 'url' => 'https://www.google.com/maps/search/?api=1&query=' . rawurlencode($query)]);
+            return 'Tap button for the Maps search is shown to the user.';
+    }
+}
+
 function claude_tools(): array
 {
     return [
+        ['name' => 'phone_action',
+         'description' => 'Like Siri/Google Assistant: call a contact, open a WhatsApp chat (optionally with text pre-filled), '
+            . 'open WhatsApp or YouTube, search YouTube or Maps. This shows a tap button on the user\'s current device; '
+            . 'it does not act by itself. Tell the user to tap the button.',
+         'input_schema' => ['type' => 'object', 'properties' => [
+             'action'  => ['type' => 'string', 'enum' => PHONE_ACTIONS],
+             'contact' => ['type' => 'string', 'description' => 'Name from list_contacts (call, whatsapp_chat)'],
+             'text'    => ['type' => 'string', 'description' => 'Optional pre-filled WhatsApp text'],
+             'query'   => ['type' => 'string', 'description' => 'For youtube_search / maps_search'],
+         ], 'required' => ['action']]],
         ['name' => 'add_task', 'description' => 'Add a to-do task for the user.',
          'input_schema' => ['type' => 'object', 'properties' => ['title' => ['type' => 'string']], 'required' => ['title']]],
         ['name' => 'list_tasks', 'description' => 'List the user\'s tasks (open ones by default).',
@@ -159,6 +226,9 @@ function run_tool(string $name, array $in, int $userId): string
                         . ($d['blocked'] ? 'blocked' : (time() - (int) $d['last_seen'] < 30 ? 'online' : 'offline')) . ')',
                     $st->fetchAll()
                 ));
+
+            case 'phone_action':
+                return phone_action((string) ($in['action'] ?? ''), $in);
 
             case 'list_contacts':
                 return implode(', ', array_keys(wa_contacts())) ?: 'No contacts configured.';

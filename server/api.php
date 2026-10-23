@@ -186,7 +186,8 @@ switch ($route) {
             fail('Thoda ruko, bahut jaldi jaldi messages', 429);
         }
         try {
-            json_out(['reply' => run_chat((int) $me['user_id'], $text)]);
+            $reply = run_chat((int) $me['user_id'], $text);
+            json_out(['reply' => $reply, 'actions' => ui_actions()]);
         } catch (RuntimeException $e) {
             fail($e->getMessage(), 502);
         }

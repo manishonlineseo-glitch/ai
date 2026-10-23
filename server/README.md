@@ -38,6 +38,15 @@ Only actions in `allowed_actions` run, and `open_app` only runs apps listed in `
 - Personal WhatsApp automation (WhatsApp Web bots) is deliberately not supported: it breaks WhatsApp's rules
   and can get the number banned.
 
+## Siri-style phone commands ("call mom", "open WhatsApp", "YouTube par gaana")
+Say or type it in the chat on your phone. Claude shows a big button; **you tap it** and the phone's own
+dialer / WhatsApp / YouTube opens. The tap is the approval, so nothing is dialled or sent by itself.
+- Contacts come from `whatsapp_contacts` in `config.php` (Claude sees names only; the link is built on the server).
+- YouTube opens search results (a web page cannot auto-play a video). WhatsApp chat opens with the text
+  pre-filled; you press send.
+- A web page cannot listen for a wake word like "Hey Siri" in the background. You open the app and tap Mic.
+  True hands-free needs a native Android app (possible later; not iPhone).
+
 ## Safety model
 - API key lives only in `config.php` on the server.
 - Every device has its own token; block/delete kills it at once. Agent tokens can't use the browser API.

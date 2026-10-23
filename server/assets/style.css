@@ -49,6 +49,10 @@ button:disabled { opacity: .5; cursor: default; }
 .msg.user { margin-left: auto; background: var(--accent); color: var(--accent-text); }
 .msg.assistant { background: var(--bg); border: 1px solid var(--line); }
 .msg.err { background: transparent; border: 1px solid var(--danger); color: var(--danger); }
+a.btn {
+  display: inline-block; margin: 6px 6px 6px 0; padding: 12px 18px; border-radius: 12px; min-height: 44px;
+  background: var(--accent); color: var(--accent-text); font-weight: 700; text-decoration: none;
+}
 .item { display: flex; align-items: center; gap: 10px; padding: 10px 0; border-bottom: 1px solid var(--line); }
 .item:last-child { border-bottom: 0; }
 .item.done .grow { text-decoration: line-through; color: var(--muted); }
