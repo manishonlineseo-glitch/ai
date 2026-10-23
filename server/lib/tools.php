@@ -17,6 +17,23 @@ const DEFAULT_AUTO_URL_DOMAINS = [
     'youtube.com', 'google.com', 'wa.me', 'whatsapp.com', 'github.com', 'claude.ai', 'chatgpt.com', 'gemini.google.com',
 ];
 
+/** CLIs that are logged in on the laptop (config.php 'engines_ready'); only these may be used. */
+function engines_ready(): array
+{
+    $e = cfg('engines_ready');
+    return is_array($e) && $e ? array_values(array_intersect($e, AI_ENGINES)) : ['codex'];
+}
+
+function require_engine_ready(string $engine): void
+{
+    if (!in_array($engine, engines_ready(), true)) {
+        throw new InvalidArgumentException(
+            $engine . ' abhi laptop par login nahi hai. Abhi chalne wale: ' . implode(', ', engines_ready())
+            . '. (Login karke config.php ke engines_ready me jodo)'
+        );
+    }
+}
+
 function is_ai_action(string $action): bool
 {
     return (bool) preg_match('/^(claude|gemini|codex)_(read|work)$/', $action);
@@ -54,6 +71,9 @@ function clean_pc_args(string $action, array $in): array
     if (!in_array($action, PC_ACTIONS, true)) {
         throw new InvalidArgumentException('Unknown action: ' . $action);
     }
+    if (is_ai_action($action)) {
+        require_engine_ready(explode('_', $action)[0]);
+    }
     switch ($action) {
         case 'open_url':
             $url = trim((string) ($in['url'] ?? ''));
@@ -89,6 +109,9 @@ function clean_pc_args(string $action, array $in): array
             $window = trim((string) ($in['window'] ?? ''));
             if ($engine !== '' && !in_array($engine, AI_ENGINES, true)) {
                 throw new InvalidArgumentException('engine claude/gemini/codex me se ek ho');
+            }
+            if ($engine !== '') {
+                require_engine_ready($engine);
             }
             if (mb_strlen($question) > 1000) {
                 throw new InvalidArgumentException('question 1000 akshar se chhota ho');

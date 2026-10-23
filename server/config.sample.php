@@ -24,6 +24,11 @@ return [
 
     'chat_rate_per_min' => 20,
 
+    // AI CLIs that are logged in on your laptop. Add 'claude' / 'gemini' after you log them in there.
+    // 'engines_ready' => ['codex'],
+    // 'brain' => 'laptop',          // laptop (your subscription, no API bill) | api | auto
+    // 'brain_engine' => 'codex',
+
     // WhatsApp Business Cloud API (official, from Meta). Leave empty to disable.
     'whatsapp_token'    => '',
     'whatsapp_phone_id' => '',
