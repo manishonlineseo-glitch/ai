@@ -10,7 +10,45 @@ declare(strict_types=1);
 function brain_mode(): string
 {
     $m = (string) (cfg('brain') ?: 'laptop');
-    return in_array($m, ['laptop', 'api', 'auto'], true) ? $m : 'laptop';
+    return in_array($m, ['laptop', 'api', 'gemini', 'openai', 'auto'], true) ? $m : 'laptop';
+}
+
+/** Which "brains" to try, in order, for one chat message. */
+function brain_chain(): array
+{
+    $mode = brain_mode();
+    if ($mode === 'api') {
+        return ['anthropic'];
+    }
+    if ($mode !== 'auto') {
+        return [$mode];
+    }
+    $order = cfg('brain_order');
+    $order = is_array($order) && $order ? $order : ['gemini', 'openai', 'anthropic', 'laptop'];
+    return array_values(array_intersect($order, ['gemini', 'openai', 'anthropic', 'laptop']));
+}
+
+function brain_has_key(string $provider): bool
+{
+    return match ($provider) {
+        'gemini'    => (string) cfg('gemini_api_key') !== '',
+        'openai'    => (string) cfg('openai_api_key') !== '',
+        'anthropic' => (string) cfg('anthropic_api_key') !== '',
+        default     => true,
+    };
+}
+
+/** For the Command Center: the chain, and whether at least one brain can answer right now. */
+function brain_status(int $userId): array
+{
+    $labels = ['gemini' => 'Gemini', 'openai' => 'OpenAI', 'anthropic' => 'Claude API', 'laptop' => 'Laptop (' . brain_engine() . ')'];
+    $chain = brain_chain();
+    $ready = false;
+    foreach ($chain as $p) {
+        $ok = $p === 'laptop' ? online_agent($userId) !== null : brain_has_key($p);
+        $ready = $ready || $ok;
+    }
+    return ['chain' => array_map(fn($p) => $labels[$p], $chain), 'ready' => $ready];
 }
 
 function brain_engine(): string
@@ -136,6 +174,65 @@ function brain_parse(string $raw): array
     return ['reply' => $raw !== '' ? $raw : '(khali jawab)', 'actions' => []];
 }
 
+/** Run the planned tools (same approval rules as always), store the chat turn, return what the phone should show. */
+function apply_brain_plan(int $userId, string $userText, array $plan): array
+{
+    $GLOBALS['jarvis_no_wait'] = true;
+    $allowed = brain_tool_names();
+    $notes = [];
+    foreach (array_slice($plan['actions'], 0, 4) as $a) {
+        $tool = (string) ($a['tool'] ?? '');
+        if (!in_array($tool, $allowed, true) || !is_array($a['input'] ?? null)) {
+            $notes[] = 'Skipped unknown action: ' . mb_substr($tool, 0, 40);
+            continue;
+        }
+        $notes[] = mb_substr(run_tool($tool, $a['input'], $userId), 0, 300);
+    }
+    $reply = $plan['reply'];
+    if ($notes) {
+        $reply .= "
+
+" . implode("
+", array_map(fn($n) => '• ' . $n, $notes));
+    }
+    $ins = db()->prepare('INSERT INTO chat (user_id, role, content, created_at) VALUES (?,?,?,?)');
+    $ins->execute([$userId, 'user', $userText, time()]);
+    $ins->execute([$userId, 'assistant', $reply, time()]);
+    return ['reply' => $reply, 'actions' => ui_actions()];
+}
+
+/** One chat turn through the configured brains. Returns ['reply','actions'] (instant) or ['job' => id] (the laptop is thinking). */
+function chat_with_brains(int $userId, string $text): array
+{
+    $errors = [];
+    foreach (brain_chain() as $provider) {
+        try {
+            switch ($provider) {
+                case 'gemini':
+                case 'openai':
+                    if (!brain_has_key($provider)) {
+                        $errors[] = $provider . ': key nahi hai';
+                        break;
+                    }
+                    $prompt = brain_prompt($userId, $text, online_agent($userId));
+                    $raw = $provider === 'gemini' ? gemini_generate($prompt) : openai_generate($prompt);
+                    return apply_brain_plan($userId, $text, brain_parse($raw));
+                case 'anthropic':
+                    if (!brain_has_key('anthropic')) {
+                        $errors[] = 'claude api: key nahi hai';
+                        break;
+                    }
+                    return ['reply' => run_chat($userId, $text), 'actions' => ui_actions()];
+                case 'laptop':
+                    return ['job' => queue_brain($userId, $text)];
+            }
+        } catch (RuntimeException $e) {
+            $errors[] = mb_substr($e->getMessage(), 0, 160);
+        }
+    }
+    throw new RuntimeException('Koi dimaag jawab nahi de paya: ' . implode(' | ', $errors));
+}
+
 /** Called when the agent reports back: runs the planned tools, stores the chat turn, saves the final answer for the phone. */
 function finalize_brain(int $id): void
 {
@@ -146,32 +243,12 @@ function finalize_brain(int $id): void
     if (!$cmd || $cmd['final'] !== null) {
         return;
     }
-    $userId = (int) $cmd['user_id'];
     $args = json_decode($cmd['args'], true) ?: [];
-    $GLOBALS['jarvis_no_wait'] = true;
 
     if ($cmd['status'] !== 'done') {
         $final = ['error' => mb_substr((string) $cmd['result'], 0, 600) ?: 'Laptop ne jawab nahi diya'];
     } else {
-        $plan = brain_parse((string) $cmd['result']);
-        $allowed = brain_tool_names();
-        $notes = [];
-        foreach (array_slice($plan['actions'], 0, 4) as $a) {
-            $tool = (string) ($a['tool'] ?? '');
-            if (!in_array($tool, $allowed, true) || !is_array($a['input'] ?? null)) {
-                $notes[] = 'Skipped unknown action: ' . mb_substr($tool, 0, 40);
-                continue;
-            }
-            $notes[] = mb_substr(run_tool($tool, $a['input'], $userId), 0, 300);
-        }
-        $reply = $plan['reply'];
-        if ($notes) {
-            $reply .= "\n\n" . implode("\n", array_map(fn($n) => '• ' . $n, $notes));
-        }
-        $ins = $pdo->prepare('INSERT INTO chat (user_id, role, content, created_at) VALUES (?,?,?,?)');
-        $ins->execute([$userId, 'user', (string) ($args['text'] ?? ''), time()]);
-        $ins->execute([$userId, 'assistant', $reply, time()]);
-        $final = ['reply' => $reply, 'actions' => ui_actions()];
+        $final = apply_brain_plan((int) $cmd['user_id'], (string) ($args['text'] ?? ''), brain_parse((string) $cmd['result']));
     }
     $pdo->prepare('UPDATE commands SET final = ? WHERE id = ?')->execute([json_encode($final, JSON_UNESCAPED_UNICODE), $id]);
 }

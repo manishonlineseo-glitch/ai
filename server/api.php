@@ -5,6 +5,7 @@ require __DIR__ . '/lib/db.php';
 require __DIR__ . '/lib/auth.php';
 require __DIR__ . '/lib/tools.php';
 require __DIR__ . '/lib/whatsapp.php';
+require __DIR__ . '/lib/llm.php';
 require __DIR__ . '/lib/brain.php';
 require __DIR__ . '/lib/claude.php';
 
@@ -195,6 +196,8 @@ switch ($route) {
                 'brain'     => brain_mode(),
                 'engine'    => brain_engine(),
                 'laptop_online' => online_agent($uid) !== null,
+                'chain'     => brain_status($uid)['chain'],
+                'ready'     => brain_status($uid)['ready'],
                 'whatsapp'  => (string) cfg('whatsapp_token') !== '' && (string) cfg('whatsapp_phone_id') !== '',
                 'contacts'  => count(wa_contacts()),
             ],
@@ -364,15 +367,9 @@ switch ($route) {
             fail('Thoda ruko, bahut jaldi jaldi messages', 429);
         }
         $uid = (int) $me['user_id'];
-        $mode = brain_mode();
         try {
-            // laptop = your own subscription via the PC agent (no API bill); api = Anthropic API; auto = laptop if online, else API
-            $useApi = $mode === 'api' || ($mode === 'auto' && !online_agent($uid) && (string) cfg('anthropic_api_key') !== '');
-            if ($useApi) {
-                $reply = run_chat($uid, $text);
-                json_out(['reply' => $reply, 'actions' => ui_actions()]);
-            }
-            json_out(['job' => queue_brain($uid, $text)]);
+            // Tries the configured brains in order (config.php 'brain' / 'brain_order'): Gemini, OpenAI, Claude API, or the laptop.
+            json_out(chat_with_brains($uid, $text));
         } catch (RuntimeException $e) {
             fail($e->getMessage(), 502);
         }

@@ -54,12 +54,15 @@ decision, so text inside a note or web page can't approve anything. Longer sente
 Turn on "Jawab bol kar sunao" and Jarvis also reads each new approval aloud.
 **shutdown/restart can't be approved by voice**, only by tapping the button (a misheard word must not power off a PC).
 
-## Chat without the API (the laptop is the brain)
-By default Jarvis does **not** use the Anthropic API. Each chat message goes to your PC agent, which asks an AI CLI that is
-logged in with your own subscription (default **Codex / ChatGPT**; set `'brain_engine' => 'claude'` or `'gemini'` in config.php).
-The CLI runs with no tools in an empty folder and only answers with a JSON plan; the server then runs the planned tools
-(tasks, notes, call/WhatsApp buttons, PC actions) with the usual approval rules. A reply takes about 10 seconds and needs
-the laptop agent to be running. `'brain' => 'api'` uses the paid API instead, `'auto'` uses the laptop when it is online.
+## Chat brains (who answers your messages)
+Each chat message goes to the first brain in `'brain_order'` that works; the others are fallbacks. Set `'brain' => 'auto'` and e.g.
+`'brain_order' => ['gemini', 'openai', 'laptop']` in config.php (keys live only there, never in the repo):
+- **gemini**: Google Gemini API (`gemini_api_key`, models in `gemini_models`). Fast (about 3-5 s) and works with the laptop off.
+- **openai**: OpenAI API (`openai_api_key`, `openai_model`). Needs credit on that account.
+- **anthropic**: Claude API (`anthropic_api_key`).
+- **laptop**: your own ChatGPT/Claude/Gemini CLI login on the PC agent (no API bill, about 10 s, laptop must be on).
+The brain only returns a JSON plan; the server runs the tools with the usual approval rules. Note that tasks, notes and device
+names are part of the prompt, so they go to whichever provider answers (free API tiers may use data to improve the provider's products).
 
 ## Work on your laptop from your phone (Claude, Gemini, ChatGPT/Codex)
 The phone talks to Jarvis, Jarvis sends the job to the **PC agent**, and the agent runs an AI coding CLI headless

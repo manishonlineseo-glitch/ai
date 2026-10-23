@@ -44,7 +44,7 @@ function is_ai_action(string $action): bool
 /** Actions that take a while and whose answer is announced in chat when done. */
 function is_long_action(string $action): bool
 {
-    return is_ai_action($action) || in_array($action, ['screen_look', 'claude_sessions', 'window_read'], true);
+    return is_ai_action($action) || in_array($action, ['screen_look', 'claude_sessions', 'window_read', 'cpu_status'], true);
 }
 
 function needs_approval(string $action, array $args): bool
