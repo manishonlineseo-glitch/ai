@@ -155,6 +155,15 @@ function skill_templatize(int $userId, string $text, array $plan): ?array
 /** Record a teacher exchange and, when it worked, strengthen or create the matching skill. */
 function skill_learn(int $userId, string $text, string $provider, array $plan, bool $ok): void
 {
+    try {
+        db_retry(fn() => skill_learn_now($userId, $text, $provider, $plan, $ok));
+    } catch (PDOException $e) {
+        // learning is a bonus: never let it break an answer the user is waiting for
+    }
+}
+
+function skill_learn_now(int $userId, string $text, string $provider, array $plan, bool $ok): void
+{
     $pdo = db();
     $pdo->prepare('INSERT INTO brain_log (user_id, text, provider, plan, ok, created_at) VALUES (?,?,?,?,?,?)')
         ->execute([$userId, mb_substr($text, 0, 1000), $provider, json_encode($plan, JSON_UNESCAPED_UNICODE), $ok ? 1 : 0, time()]);

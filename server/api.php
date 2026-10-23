@@ -569,7 +569,7 @@ switch ($route) {
         $st->execute([(int) ($_GET['id'] ?? 0), $me['user_id']]);
         $row = db_fetch($st);
         if (!$row) {
-            fail('Nahi mila', 404);
+            json_out(['done' => true, 'error' => 'Ye sawal purana ho gaya tha, dobara bhejo']);
         }
         if ($row['final'] !== null) {
             json_out(['done' => true] + (json_decode($row['final'], true) ?: ['error' => 'Jawab padh nahi paya']));

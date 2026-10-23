@@ -25,33 +25,69 @@ function llm_error_text(array $j, int $code, string $err): string
     return $err !== '' ? 'connect: ' . $err : ($j['error']['message'] ?? ('HTTP ' . $code));
 }
 
-/** Google Gemini. Tries each configured model in turn, because one model can be "high demand" while another is fine. */
+/**
+ * One Gemini call. A model whose free daily quota is used up is skipped until its quota returns (the error says when),
+ * so it costs no time on every message; every failure is also appended to data/llm_errors.log to explain a bad day later.
+ * Returns the text or throws.
+ */
+function gemini_call(string $model, array $body, int $timeout): string
+{
+    $until = (int) kv_get('gem_block_' . $model);
+    if ($until > time()) {
+        throw new RuntimeException($model . ': quota khatam, ' . round(($until - time()) / 3600, 1) . ' ghante baad wapas');
+    }
+    [$code, $j, $err] = llm_http(
+        'https://generativelanguage.googleapis.com/v1beta/models/' . rawurlencode($model) . ':generateContent',
+        ['x-goog-api-key: ' . (string) cfg('gemini_api_key')],
+        $body,
+        $timeout
+    );
+    $text = trim((string) ($j['candidates'][0]['content']['parts'][0]['text'] ?? ''));
+    if ($code === 200 && $text !== '') {
+        return $text;
+    }
+    $msg = llm_error_text($j, $code, $err);
+    if ($code === 429) { // quota: per day => wait until it returns, per minute => a short pause
+        $perDay = false;
+        $delay = 30;
+        foreach ($j['error']['details'] ?? [] as $d) {
+            foreach ($d['violations'] ?? [] as $v) {
+                $perDay = $perDay || str_contains((string) ($v['quotaId'] ?? ''), 'PerDay');
+            }
+            if (isset($d['retryDelay'])) {
+                $delay = (int) $d['retryDelay'];
+            }
+        }
+        kv_set('gem_block_' . $model, (string) (time() + ($perDay ? min(max($delay, 600), 86400) : 30)));
+    }
+    @file_put_contents(__DIR__ . '/../data/llm_errors.log', gmdate('c') . " gemini $model HTTP $code " . mb_substr($msg, 0, 200) . "\n", FILE_APPEND);
+    throw new RuntimeException($model . ': ' . mb_substr($msg, 0, 120));
+}
+
+function gemini_models(): array
+{
+    $models = cfg('gemini_models');
+    return is_array($models) && $models ? $models : ['gemini-3.1-flash-lite', 'gemini-3.5-flash'];
+}
+
+/** Google Gemini with a JSON answer. Tries each configured model in turn. */
 function gemini_generate(string $prompt): string
 {
-    $key = (string) cfg('gemini_api_key');
-    if ($key === '') {
+    if ((string) cfg('gemini_api_key') === '') {
         throw new RuntimeException('gemini_api_key set nahi hai');
     }
-    $models = cfg('gemini_models');
-    $models = is_array($models) && $models ? $models : ['gemini-3.1-flash-lite', 'gemini-3.5-flash'];
     $last = '';
-    foreach ($models as $m) {
-        [$code, $j, $err] = llm_http(
-            'https://generativelanguage.googleapis.com/v1beta/models/' . rawurlencode((string) $m) . ':generateContent',
-            ['x-goog-api-key: ' . $key],
-            [
+    foreach (gemini_models() as $i => $m) {
+        try {
+            return gemini_call((string) $m, [
                 'contents'         => [['role' => 'user', 'parts' => [['text' => $prompt]]]],
                 'generationConfig' => ['responseMimeType' => 'application/json', 'temperature' => 0.3],
-            ],
-            $m === $models[0] ? 12 : 25
-        );
-        $text = $j['candidates'][0]['content']['parts'][0]['text'] ?? '';
-        if ($code === 200 && $text !== '') {
-            return $text;
+            ], $i === 0 ? 12 : 25);
+        } catch (RuntimeException $e) {
+            $last .= ($last ? ' | ' : '') . $e->getMessage();
         }
-        $last = $m . ': ' . llm_error_text($j, $code, $err);
     }
-    throw new RuntimeException('Gemini: ' . mb_substr($last, 0, 200));
+    throw new RuntimeException('Gemini: ' . mb_substr($last, 0, 260));
 }
 
 /** OpenAI chat completions. */
@@ -75,28 +111,22 @@ function openai_generate(string $prompt): string
     throw new RuntimeException('OpenAI: ' . mb_substr($model . ': ' . llm_error_text($j, $code, $err), 0, 200));
 }
 
-/** Plain-text Gemini answer (no JSON mode). Tries each configured model like gemini_generate(). */
+/** Plain-text Gemini answer (no JSON mode). */
 function gemini_text(string $prompt, int $timeout = 40): string
 {
-    $key = (string) cfg('gemini_api_key');
-    if ($key === '') {
+    if ((string) cfg('gemini_api_key') === '') {
         throw new RuntimeException('gemini_api_key set nahi hai');
     }
-    $models = cfg('gemini_models');
-    $models = is_array($models) && $models ? $models : ['gemini-3.1-flash-lite', 'gemini-3.5-flash'];
     $last = '';
-    foreach ($models as $m) {
-        [$code, $j, $err] = llm_http(
-            'https://generativelanguage.googleapis.com/v1beta/models/' . rawurlencode((string) $m) . ':generateContent',
-            ['x-goog-api-key: ' . $key],
-            ['contents' => [['role' => 'user', 'parts' => [['text' => $prompt]]]], 'generationConfig' => ['temperature' => 0.4]],
-            $timeout
-        );
-        $text = trim((string) ($j['candidates'][0]['content']['parts'][0]['text'] ?? ''));
-        if ($code === 200 && $text !== '') {
-            return $text;
+    foreach (gemini_models() as $m) {
+        try {
+            return gemini_call((string) $m, [
+                'contents'         => [['role' => 'user', 'parts' => [['text' => $prompt]]]],
+                'generationConfig' => ['temperature' => 0.4],
+            ], $timeout);
+        } catch (RuntimeException $e) {
+            $last .= ($last ? ' | ' : '') . $e->getMessage();
         }
-        $last = $m . ': ' . llm_error_text($j, $code, $err);
     }
-    throw new RuntimeException('Gemini: ' . mb_substr($last, 0, 200));
+    throw new RuntimeException('Gemini: ' . mb_substr($last, 0, 260));
 }

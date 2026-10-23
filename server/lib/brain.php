@@ -175,10 +175,12 @@ function queue_brain(int $userId, string $text): int
         throw new RuntimeException('Laptop agent offline hai. Laptop par agent chalao (ya config.php me brain = api).');
     }
     $args = ['engine' => brain_engine(), 'prompt' => brain_prompt($userId, $text, $agent), 'text' => $text];
-    db()->prepare(
-        'INSERT INTO commands (user_id, device_id, action, args, status, created_at, updated_at) VALUES (?,?,?,?,?,?,?)'
-    )->execute([$userId, $agent['id'], 'brain_chat', json_encode($args, JSON_UNESCAPED_UNICODE), 'pending', time(), time()]);
-    return (int) db()->lastInsertId();
+    return db_retry(function () use ($userId, $agent, $args) {
+        db()->prepare(
+            'INSERT INTO commands (user_id, device_id, action, args, status, created_at, updated_at) VALUES (?,?,?,?,?,?,?)'
+        )->execute([$userId, $agent['id'], 'brain_chat', json_encode($args, JSON_UNESCAPED_UNICODE), 'pending', time(), time()]);
+        return (int) db()->lastInsertId();
+    });
 }
 
 /** Pull the JSON plan out of whatever the CLI printed (it may add a fence or a sentence despite the instructions). */
@@ -222,9 +224,11 @@ function apply_brain_plan(int $userId, string $userText, array $plan): array
 " . implode("
 ", array_map(fn($n) => '• ' . $n, $notes));
     }
-    $ins = db()->prepare('INSERT INTO chat (user_id, role, content, created_at) VALUES (?,?,?,?)');
-    $ins->execute([$userId, 'user', $userText, time()]);
-    $ins->execute([$userId, 'assistant', $reply, time()]);
+    db_retry(function () use ($userId, $userText, $reply) {
+        $ins = db()->prepare('INSERT INTO chat (user_id, role, content, created_at) VALUES (?,?,?,?)');
+        $ins->execute([$userId, 'user', $userText, time()]);
+        $ins->execute([$userId, 'assistant', $reply, time()]);
+    });
     $worked = true; // learnable only if every planned tool really ran
     foreach ($notes as $n) {
         $worked = $worked && !str_starts_with($n, 'Error') && !str_starts_with($n, 'Skipped');

@@ -3,6 +3,22 @@ declare(strict_types=1);
 
 const SCHEMA_VERSION = 7;
 
+/**
+ * A single-value read (COUNT(*), MAX(id)...) leaves the statement open until it is reset, and in SQLite an open read keeps
+ * a snapshot. If another request commits meanwhile, the next write of this request fails at once with "database is locked"
+ * (SQLITE_BUSY_SNAPSHOT, which no timeout can wait out). Releasing the cursor after fetchColumn() closes that hole everywhere.
+ */
+class JStatement extends PDOStatement
+{
+    public function fetchColumn(int $column = 0): mixed
+    {
+        $value = parent::fetchColumn($column);
+        $this->closeCursor();
+        return $value;
+    }
+}
+
+
 function cfg(?string $key = null)
 {
     static $c = null;
@@ -27,6 +43,7 @@ function db(): PDO
     $pdo = new PDO('sqlite:' . $path, null, null, [
         PDO::ATTR_ERRMODE            => PDO::ERRMODE_EXCEPTION,
         PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
+        PDO::ATTR_STATEMENT_CLASS    => [JStatement::class],
     ]);
     // Many callers at once (PC agent every 4 s, each open app every 4 s, the scheduler): WAL lets readers and the one
     // writer work side by side, and a writer waits up to 10 s for another writer instead of failing at once.
@@ -46,6 +63,34 @@ function db(): PDO
         $pdo->exec('PRAGMA user_version = ' . SCHEMA_VERSION);
     }
     return $pdo;
+}
+
+/** Run a short database step again if another request held the write lock for too long (only for idempotent steps). */
+function db_retry(callable $fn, int $tries = 4): mixed
+{
+    for ($i = 1;; $i++) {
+        try {
+            return $fn();
+        } catch (PDOException $e) {
+            if ($i >= $tries || !str_contains($e->getMessage(), 'locked')) {
+                throw $e;
+            }
+            usleep(150000 * $i);
+        }
+    }
+}
+
+function kv_get(string $key): ?string
+{
+    $st = db()->prepare('SELECT v FROM kv WHERE k = ?');
+    $st->execute([$key]);
+    $row = db_fetch($st);
+    return $row ? (string) $row['v'] : null;
+}
+
+function kv_set(string $key, string $value): void
+{
+    db()->prepare('INSERT OR REPLACE INTO kv (k, v) VALUES (?, ?)')->execute([$key, $value]);
 }
 
 /** One row (or null) and the read cursor is released at once, so the next write in this request can never trip over it. */
