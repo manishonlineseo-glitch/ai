@@ -91,6 +91,45 @@ switch ($route) {
         set_device_cookie(create_device((int) $user['id'], clean_device_name($in['device_name'] ?? ''), device_type($in['device_type'] ?? ''), 'client'));
         json_out(['ok' => true]);
 
+    // One-time code so a new device can join without ever typing the owner's password.
+    case 'pair_login':
+        if (too_many_failures()) {
+            fail('Bahut galat koshishen. 15 minute baad try karo.', 429);
+        }
+        $st = $pdo->prepare('SELECT id, user_id, name, type FROM pair_codes WHERE code_hash = ? AND expires_at > ?');
+        $st->execute([pair_code_hash((string) ($in['code'] ?? '')), time()]);
+        $pc = $st->fetch();
+        $used = false;
+        if ($pc) {
+            $del = $pdo->prepare('DELETE FROM pair_codes WHERE id = ?');
+            $del->execute([$pc['id']]);
+            $used = $del->rowCount() === 1; // two requests can't both consume one code
+        }
+        if (!$used) {
+            record_failure();
+            fail('Code galat hai ya expire ho gaya', 401);
+        }
+        set_device_cookie(create_device((int) $pc['user_id'], $pc['name'], device_type($pc['type']), 'client'));
+        json_out(['ok' => true]);
+
+    case 'pair_create':
+        $me = require_client();
+        $name = clean_device_name($in['name'] ?? '');
+        $pdo->prepare('DELETE FROM pair_codes WHERE expires_at < ?')->execute([time()]);
+        $active = $pdo->prepare('SELECT COUNT(*) FROM pair_codes WHERE user_id = ?');
+        $active->execute([$me['user_id']]);
+        if ((int) $active->fetchColumn() >= 10) {
+            fail('Pehle se 10 unused codes hain, thoda ruko ya unhe use karo');
+        }
+        $alphabet = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789'; // no 0/O/1/I/L, easy to read aloud
+        $code = '';
+        for ($i = 0; $i < 8; $i++) {
+            $code .= $alphabet[random_int(0, strlen($alphabet) - 1)];
+        }
+        $pdo->prepare('INSERT INTO pair_codes (user_id, code_hash, name, type, expires_at) VALUES (?,?,?,?,?)')
+            ->execute([$me['user_id'], pair_code_hash($code), $name, device_type($in['type'] ?? ''), time() + 900]);
+        json_out(['code' => substr($code, 0, 4) . '-' . substr($code, 4), 'expires_in' => 900, 'name' => $name]);
+
     case 'logout':
         $d = require_client();
         $pdo->prepare('DELETE FROM devices WHERE id = ?')->execute([$d['id']]);

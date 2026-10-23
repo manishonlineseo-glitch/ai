@@ -136,6 +136,29 @@ async function tryVoiceDecision(text) {
 }
 
 // ---------- auth screen ----------
+function showCodeLogin() {
+  const err = h('div', { class: 'error', role: 'alert' });
+  const form = h('form', {
+    onsubmit: async (e) => {
+      e.preventDefault();
+      err.textContent = '';
+      try {
+        await api('pair_login', { code: new FormData(form).get('code') });
+        boot();
+      } catch (x) { err.textContent = x.message; }
+    },
+  },
+    h('label', { for: 'pc' }, 'Device code (jaise K7M2-9QXA)'),
+    h('input', { id: 'pc', name: 'code', autocomplete: 'off', autocapitalize: 'characters', spellcheck: 'false', maxlength: 12, required: true, style: 'font-size:1.4rem;letter-spacing:.15em;text-align:center' }),
+    err,
+    h('button', { type: 'submit', style: 'width:100%' }, 'Is device ko jodo'),
+    h('button', { type: 'button', class: 'ghost', style: 'width:100%;margin-top:8px', onclick: () => showAuth(false) }, 'Username/password se login'));
+  root.replaceChildren(h('div', { class: 'auth' },
+    h('h1', { class: 'serif' }, 'Jarvis'),
+    h('p', { class: 'muted' }, 'Owner ke Devices tab me "Naya device jodo" se code banta hai. Wo code 15 minute me ek hi baar chalta hai.'),
+    h('div', { class: 'card' }, form)));
+}
+
 function showAuth(setup) {
   const err = h('div', { class: 'error', role: 'alert' });
   const type = guessType();
@@ -162,7 +185,8 @@ function showAuth(setup) {
     h('label', null, 'Device type'),
     typeSelect(type),
     err,
-    h('button', { type: 'submit', style: 'width:100%' }, setup ? 'Account banao' : 'Login'));
+    h('button', { type: 'submit', style: 'width:100%' }, setup ? 'Account banao' : 'Login'),
+    setup ? null : h('button', { type: 'button', class: 'ghost', style: 'width:100%;margin-top:8px', onclick: showCodeLogin }, 'Device code se jodo'));
   root.replaceChildren(h('div', { class: 'auth' },
     h('h1', { class: 'serif' }, 'Jarvis'),
     h('p', { class: 'muted' }, setup ? 'Pehli baar setup: apna owner account banao.' : 'Login karo. Har device alag se register hota hai.'),
@@ -540,8 +564,28 @@ function viewDevices(view) {
   const err = h('div', { class: 'error', role: 'alert' });
   const name = h('input', { placeholder: 'PC ka naam, jaise Home-PC', maxlength: 40, 'aria-label': 'PC agent name' });
 
+  const pairOut = h('div');
+  const pairErr = h('div', { class: 'error', role: 'alert' });
+  const pairName = h('input', { placeholder: 'Device ka naam, jaise iPhone Office', maxlength: 40, 'aria-label': 'New device name', required: true });
+  const pairType = typeSelect('iphone');
+  const pairForm = h('form', { onsubmit: async (e) => {
+    e.preventDefault();
+    pairErr.textContent = '';
+    try {
+      const r = await api('pair_create', { name: pairName.value, type: pairType.value });
+      pairOut.replaceChildren(
+        h('div', { class: 'pair-code mono', 'aria-label': 'Device code' }, r.code),
+        h('p', { class: 'muted' }, r.name + ' par ' + location.origin + ' kholo, "Device code se jodo" dabao aur ye code daalo. 15 minute me ek hi baar chalega.'));
+      pairName.value = '';
+    } catch (x) { pairErr.textContent = x.message; }
+  } }, pairName, pairType, pairErr, h('button', { type: 'submit' }, 'Code banao'));
+
   page(view,
     h('h2', null, 'Mere devices'), devicesBox,
+    h('h2', null, 'Naya device jodo (code se)'),
+    h('div', { class: 'card' },
+      h('p', { class: 'muted' }, 'Phone/TV par password type karne ki jagah ek baar ka code use karo.'),
+      pairForm, pairOut),
     h('h2', null, 'PC agent jodo'),
     h('div', { class: 'card' },
       h('p', { class: 'muted' }, 'Jis laptop/desktop ko control karna hai, uska ek token banao. Token sirf ek baar dikhega.'),

@@ -108,6 +108,14 @@ function migrate_tables(PDO $pdo): void
             content TEXT NOT NULL,
             created_at INTEGER NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS pair_codes (
+            id INTEGER PRIMARY KEY,
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            code_hash TEXT NOT NULL UNIQUE,
+            name TEXT NOT NULL,
+            type TEXT NOT NULL,
+            expires_at INTEGER NOT NULL
+        );
         CREATE TABLE IF NOT EXISTS login_attempts (
             ip TEXT NOT NULL,
             ts INTEGER NOT NULL

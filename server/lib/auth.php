@@ -134,6 +134,11 @@ function clean_device_name(mixed $n): string
     return $n;
 }
 
+function pair_code_hash(string $code): string
+{
+    return hash('sha256', strtoupper(preg_replace('/[^A-Za-z0-9]/', '', $code) ?? ''));
+}
+
 function too_many_failures(): bool
 {
     $ip = $_SERVER['REMOTE_ADDR'] ?? '0';
