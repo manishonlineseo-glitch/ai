@@ -33,7 +33,7 @@ function gemini_generate(string $prompt): string
         throw new RuntimeException('gemini_api_key set nahi hai');
     }
     $models = cfg('gemini_models');
-    $models = is_array($models) && $models ? $models : ['gemini-3.5-flash', 'gemini-3.1-flash-lite'];
+    $models = is_array($models) && $models ? $models : ['gemini-3.1-flash-lite', 'gemini-3.5-flash'];
     $last = '';
     foreach ($models as $m) {
         [$code, $j, $err] = llm_http(
@@ -43,7 +43,7 @@ function gemini_generate(string $prompt): string
                 'contents'         => [['role' => 'user', 'parts' => [['text' => $prompt]]]],
                 'generationConfig' => ['responseMimeType' => 'application/json', 'temperature' => 0.3],
             ],
-            25
+            $m === $models[0] ? 12 : 25
         );
         $text = $j['candidates'][0]['content']['parts'][0]['text'] ?? '';
         if ($code === 200 && $text !== '') {
@@ -83,7 +83,7 @@ function gemini_text(string $prompt, int $timeout = 40): string
         throw new RuntimeException('gemini_api_key set nahi hai');
     }
     $models = cfg('gemini_models');
-    $models = is_array($models) && $models ? $models : ['gemini-3.5-flash', 'gemini-3.1-flash-lite'];
+    $models = is_array($models) && $models ? $models : ['gemini-3.1-flash-lite', 'gemini-3.5-flash'];
     $last = '';
     foreach ($models as $m) {
         [$code, $j, $err] = llm_http(

@@ -26,7 +26,7 @@ return [
 
     // Chat brains. 'auto' tries them in order and skips any without a key / when the laptop is offline.
     // 'brain' => 'auto', 'brain_order' => ['gemini', 'openai', 'anthropic', 'laptop'],
-    // 'gemini_api_key' => '', 'gemini_models' => ['gemini-3.5-flash', 'gemini-3.1-flash-lite'],
+    // 'gemini_api_key' => '', 'gemini_models' => ['gemini-3.1-flash-lite', 'gemini-3.5-flash'],
     // 'openai_api_key' => '', 'openai_model' => 'gpt-5.4-mini',
     // AI CLIs that are logged in on your laptop. Add 'claude' / 'gemini' after you log them in there.
     // 'engines_ready' => ['codex'],
