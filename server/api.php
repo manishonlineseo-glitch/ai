@@ -1,0 +1,245 @@
+<?php
+declare(strict_types=1);
+
+require __DIR__ . '/lib/db.php';
+require __DIR__ . '/lib/auth.php';
+require __DIR__ . '/lib/tools.php';
+require __DIR__ . '/lib/claude.php';
+
+if (cfg('require_https') && !is_https()) {
+    fail('HTTPS zaroori hai', 400);
+}
+
+$method = $_SERVER['REQUEST_METHOD'];
+$route = (string) ($_GET['r'] ?? '');
+
+// Browsers can't add this header cross-site, so it blocks CSRF on top of SameSite=Strict.
+if ($method === 'POST' && ($_SERVER['HTTP_X_REQUESTED_WITH'] ?? '') !== 'jarvis') {
+    fail('Bad request', 400);
+}
+
+$pdo = db();
+$in = $method === 'POST' ? body() : [];
+
+function user_count(): int
+{
+    return (int) db()->query('SELECT COUNT(*) FROM users')->fetchColumn();
+}
+
+function device_type(mixed $t): string
+{
+    $t = (string) $t;
+    return in_array($t, DEVICE_TYPES, true) ? $t : 'other';
+}
+
+switch ($route) {
+    // ---------- session ----------
+    case 'state':
+        $d = current_device();
+        json_out([
+            'setup_needed' => user_count() === 0,
+            'user'         => $d && $d['role'] === 'client' ? $d['username'] : null,
+            'device'       => $d && $d['role'] === 'client' ? ['id' => (int) $d['id'], 'name' => $d['name'], 'type' => $d['type']] : null,
+            'device_types' => DEVICE_TYPES,
+        ]);
+
+    case 'setup':
+        if (user_count() > 0) {
+            fail('Setup ho chuka hai', 403);
+        }
+        $u = trim((string) ($in['username'] ?? ''));
+        $p = (string) ($in['password'] ?? '');
+        if (!preg_match('/^[A-Za-z0-9_.-]{3,32}$/', $u)) {
+            fail('Username 3-32 akshar (a-z, 0-9, _ . -)');
+        }
+        if (strlen($p) < 12) {
+            fail('Password kam se kam 12 akshar ka rakho');
+        }
+        $pdo->prepare('INSERT INTO users (username, pass_hash, created_at) VALUES (?,?,?)')
+            ->execute([$u, password_hash($p, PASSWORD_DEFAULT), time()]);
+        $uid = (int) $pdo->lastInsertId();
+        set_device_cookie(create_device($uid, clean_device_name($in['device_name'] ?? 'Laptop'), device_type($in['device_type'] ?? ''), 'client'));
+        json_out(['ok' => true]);
+
+    case 'login':
+        if (too_many_failures()) {
+            fail('Bahut galat koshishen. 15 minute baad try karo.', 429);
+        }
+        $st = $pdo->prepare('SELECT * FROM users WHERE username = ?');
+        $st->execute([trim((string) ($in['username'] ?? ''))]);
+        $user = $st->fetch();
+        // Always run one hash check so timing doesn't reveal valid usernames.
+        $hash = $user['pass_hash'] ?? password_hash('dummy-password', PASSWORD_DEFAULT);
+        $ok = password_verify((string) ($in['password'] ?? ''), $hash) && $user;
+        if (!$ok) {
+            record_failure();
+            fail('Username ya password galat hai', 401);
+        }
+        set_device_cookie(create_device((int) $user['id'], clean_device_name($in['device_name'] ?? ''), device_type($in['device_type'] ?? ''), 'client'));
+        json_out(['ok' => true]);
+
+    case 'logout':
+        $d = require_client();
+        $pdo->prepare('DELETE FROM devices WHERE id = ?')->execute([$d['id']]);
+        setcookie(DEVICE_COOKIE, '', ['expires' => 1, 'path' => '/']);
+        json_out(['ok' => true]);
+
+    // ---------- devices ----------
+    case 'devices':
+        $me = require_client();
+        $st = $pdo->prepare('SELECT id, name, type, role, last_seen, blocked, created_at FROM devices WHERE user_id = ? ORDER BY id');
+        $st->execute([$me['user_id']]);
+        $rows = array_map(function ($r) use ($me) {
+            $r['id'] = (int) $r['id'];
+            $r['blocked'] = (bool) $r['blocked'];
+            $r['online'] = !$r['blocked'] && time() - (int) $r['last_seen'] < 30;
+            $r['current'] = $r['id'] === (int) $me['id'];
+            return $r;
+        }, $st->fetchAll());
+        json_out(['devices' => $rows]);
+
+    case 'device_block':
+    case 'device_delete':
+    case 'device_rename':
+        $me = require_client();
+        $id = (int) ($in['id'] ?? 0);
+        if ($id === (int) $me['id'] && $route !== 'device_rename') {
+            fail('Apne is device par ye nahi kar sakte (logout use karo)');
+        }
+        if ($route === 'device_block') {
+            $st = $pdo->prepare('UPDATE devices SET blocked = ? WHERE id = ? AND user_id = ?');
+            $st->execute([empty($in['blocked']) ? 0 : 1, $id, $me['user_id']]);
+        } elseif ($route === 'device_rename') {
+            $st = $pdo->prepare('UPDATE devices SET name = ? WHERE id = ? AND user_id = ?');
+            $st->execute([clean_device_name($in['name'] ?? ''), $id, $me['user_id']]);
+        } else {
+            $st = $pdo->prepare('DELETE FROM devices WHERE id = ? AND user_id = ?');
+            $st->execute([$id, $me['user_id']]);
+        }
+        json_out(['ok' => $st->rowCount() > 0]);
+
+    case 'agent_create':
+        $me = require_client();
+        $name = clean_device_name($in['name'] ?? '');
+        $token = create_device((int) $me['user_id'], $name, device_type($in['type'] ?? 'laptop'), 'agent');
+        json_out(['token' => $token, 'note' => 'Ye token sirf abhi dikhega. Agent config me daal do.']);
+
+    // ---------- tasks & notes ----------
+    case 'tasks':
+        $me = require_client();
+        $st = $pdo->prepare('SELECT id, title, done FROM tasks WHERE user_id = ? ORDER BY done, id DESC LIMIT 200');
+        $st->execute([$me['user_id']]);
+        json_out(['tasks' => $st->fetchAll()]);
+
+    case 'task_add':
+        $me = require_client();
+        json_out(['result' => run_tool('add_task', ['title' => $in['title'] ?? ''], (int) $me['user_id'])]);
+
+    case 'task_toggle':
+        $me = require_client();
+        $pdo->prepare('UPDATE tasks SET done = ? WHERE id = ? AND user_id = ?')
+            ->execute([empty($in['done']) ? 0 : 1, (int) ($in['id'] ?? 0), $me['user_id']]);
+        json_out(['ok' => true]);
+
+    case 'task_delete':
+        $me = require_client();
+        $pdo->prepare('DELETE FROM tasks WHERE id = ? AND user_id = ?')->execute([(int) ($in['id'] ?? 0), $me['user_id']]);
+        json_out(['ok' => true]);
+
+    case 'notes':
+        $me = require_client();
+        $st = $pdo->prepare('SELECT id, body, created_at FROM notes WHERE user_id = ? ORDER BY id DESC LIMIT 200');
+        $st->execute([$me['user_id']]);
+        json_out(['notes' => $st->fetchAll()]);
+
+    case 'note_add':
+        $me = require_client();
+        json_out(['result' => run_tool('add_note', ['body' => $in['body'] ?? ''], (int) $me['user_id'])]);
+
+    case 'note_delete':
+        $me = require_client();
+        $pdo->prepare('DELETE FROM notes WHERE id = ? AND user_id = ?')->execute([(int) ($in['id'] ?? 0), $me['user_id']]);
+        json_out(['ok' => true]);
+
+    // ---------- chat ----------
+    case 'chat_history':
+        $me = require_client();
+        $st = $pdo->prepare('SELECT role, content FROM chat WHERE user_id = ? ORDER BY id DESC LIMIT 40');
+        $st->execute([$me['user_id']]);
+        json_out(['messages' => array_reverse($st->fetchAll())]);
+
+    case 'chat_clear':
+        $me = require_client();
+        $pdo->prepare('DELETE FROM chat WHERE user_id = ?')->execute([$me['user_id']]);
+        json_out(['ok' => true]);
+
+    case 'chat':
+        $me = require_client();
+        $text = trim((string) ($in['text'] ?? ''));
+        if ($text === '' || mb_strlen($text) > 2000) {
+            fail('Message 1-2000 akshar ka chahiye');
+        }
+        $st = $pdo->prepare('SELECT COUNT(*) FROM chat WHERE user_id = ? AND role = "user" AND created_at > ?');
+        $st->execute([$me['user_id'], time() - 60]);
+        if ((int) $st->fetchColumn() >= (int) cfg('chat_rate_per_min')) {
+            fail('Thoda ruko, bahut jaldi jaldi messages', 429);
+        }
+        try {
+            json_out(['reply' => run_chat((int) $me['user_id'], $text)]);
+        } catch (RuntimeException $e) {
+            fail($e->getMessage(), 502);
+        }
+
+    // ---------- PC commands (browser side) ----------
+    case 'commands':
+        $me = require_client();
+        $st = $pdo->prepare(
+            'SELECT c.id, c.action, c.args, c.status, c.result, c.created_at, d.name AS device
+             FROM commands c JOIN devices d ON d.id = c.device_id
+             WHERE c.user_id = ? ORDER BY c.id DESC LIMIT 20'
+        );
+        $st->execute([$me['user_id']]);
+        $rows = array_map(function ($r) {
+            $r['args'] = json_decode($r['args'], true) ?: new stdClass();
+            return $r;
+        }, $st->fetchAll());
+        json_out(['commands' => $rows]);
+
+    case 'command_decide':
+        $me = require_client();
+        $new = empty($in['approve']) ? 'denied' : 'pending';
+        $st = $pdo->prepare('UPDATE commands SET status = ?, updated_at = ? WHERE id = ? AND user_id = ? AND status = "awaiting_confirm"');
+        $st->execute([$new, time(), (int) ($in['id'] ?? 0), $me['user_id']]);
+        json_out(['ok' => $st->rowCount() > 0]);
+
+    // ---------- PC agent side ----------
+    case 'agent_poll':
+        $agent = require_agent();
+        $pdo->prepare('UPDATE commands SET status = "failed", result = "timeout", updated_at = ? WHERE device_id = ? AND status = "running" AND updated_at < ?')
+            ->execute([time(), $agent['id'], time() - 120]);
+        $pdo->prepare('UPDATE commands SET status = "expired", updated_at = ? WHERE device_id = ? AND status IN ("pending","awaiting_confirm") AND created_at < ?')
+            ->execute([time(), $agent['id'], time() - 600]);
+        $st = $pdo->prepare('SELECT id, action, args FROM commands WHERE device_id = ? AND status = "pending" ORDER BY id LIMIT 5');
+        $st->execute([$agent['id']]);
+        $rows = $st->fetchAll();
+        $mark = $pdo->prepare('UPDATE commands SET status = "running", updated_at = ? WHERE id = ?');
+        foreach ($rows as &$r) {
+            $mark->execute([time(), $r['id']]);
+            $r['id'] = (int) $r['id'];
+            $r['args'] = json_decode($r['args'], true) ?: new stdClass();
+        }
+        json_out(['commands' => $rows]);
+
+    case 'agent_result':
+        $agent = require_agent();
+        $st = $pdo->prepare('UPDATE commands SET status = ?, result = ?, updated_at = ? WHERE id = ? AND device_id = ? AND status = "running"');
+        $st->execute([
+            empty($in['ok']) ? 'failed' : 'done',
+            mb_substr((string) ($in['result'] ?? ''), 0, 2000),
+            time(), (int) ($in['id'] ?? 0), $agent['id'],
+        ]);
+        json_out(['ok' => $st->rowCount() > 0]);
+
+    default:
+        fail('Not found', 404);
+}

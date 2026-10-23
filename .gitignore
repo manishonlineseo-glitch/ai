@@ -140,3 +140,9 @@ cython_debug/
 # IDE/Editor
 .vscode
 .idea
+# Jarvis platform: secrets and local data (never commit)
+server/config.php
+server/data/*.sqlite*
+agent/config.json
+.env
+Face-Recognition/samples/

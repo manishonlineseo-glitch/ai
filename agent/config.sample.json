@@ -1,0 +1,10 @@
+{
+  "server_url": "https://your-domain.com/jarvis/",
+  "token": "PASTE_64_CHAR_TOKEN_FROM_THE_DEVICES_TAB",
+  "poll_seconds": 4,
+  "apps": {
+    "notepad": "C:\\Windows\\notepad.exe",
+    "calculator": "C:\\Windows\\System32\\calc.exe"
+  },
+  "allowed_actions": ["cpu_status", "speak", "open_url", "open_app", "lock", "shutdown", "restart", "cancel_shutdown"]
+}
