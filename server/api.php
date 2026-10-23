@@ -6,6 +6,7 @@ require __DIR__ . '/lib/auth.php';
 require __DIR__ . '/lib/tools.php';
 require __DIR__ . '/lib/whatsapp.php';
 require __DIR__ . '/lib/llm.php';
+require __DIR__ . '/lib/skills.php';
 require __DIR__ . '/lib/brain.php';
 require __DIR__ . '/lib/claude.php';
 
@@ -151,6 +152,47 @@ switch ($route) {
         setcookie(DEVICE_COOKIE, '', ['expires' => 1, 'path' => '/']);
         json_out(['ok' => true]);
 
+    // ---------- what Jarvis has learned ----------
+    case 'skills':
+        $me = require_client();
+        $st = $pdo->prepare('SELECT id, template, plan, seen_count, used_count, enabled, created_at, last_used FROM skills WHERE user_id = ? ORDER BY used_count DESC, seen_count DESC, id DESC LIMIT 200');
+        $st->execute([$me['user_id']]);
+        $rows = array_map(function ($r) {
+            $plan = json_decode($r['plan'], true) ?: [];
+            $r['does'] = implode(' + ', array_map(function ($a) {
+                $in = $a['input'] ?? [];
+                return ($a['tool'] ?? '?') . (isset($in['action']) ? ':' . $in['action'] : '');
+            }, $plan));
+            unset($r['plan']);
+            $r['active'] = (int) $r['seen_count'] >= skill_min_seen();
+            return $r;
+        }, $st->fetchAll());
+        json_out(['skills' => $rows, 'stats' => skill_stats((int) $me['user_id']), 'min_seen' => skill_min_seen()]);
+
+    case 'skill_toggle':
+        $me = require_client();
+        $st = $pdo->prepare('UPDATE skills SET enabled = ? WHERE id = ? AND user_id = ?');
+        $st->execute([empty($in['enabled']) ? 0 : 1, (int) ($in['id'] ?? 0), $me['user_id']]);
+        json_out(['ok' => $st->rowCount() > 0]);
+
+    case 'skill_delete':
+        $me = require_client();
+        $st = $pdo->prepare('DELETE FROM skills WHERE id = ? AND user_id = ?');
+        $st->execute([(int) ($in['id'] ?? 0), $me['user_id']]);
+        json_out(['ok' => $st->rowCount() > 0]);
+
+    case 'brain_export': // training data for a future local model: one JSON object per line
+        $me = require_client();
+        header('Content-Type: application/x-ndjson; charset=utf-8');
+        header('Content-Disposition: attachment; filename="jarvis-training-data.jsonl"');
+        header('Cache-Control: no-store');
+        $st = $pdo->prepare('SELECT text, provider, plan, created_at FROM brain_log WHERE user_id = ? AND ok = 1 ORDER BY id');
+        $st->execute([$me['user_id']]);
+        while ($r = $st->fetch()) {
+            echo json_encode(['input' => $r['text'], 'output' => json_decode($r['plan'], true), 'teacher' => $r['provider'], 'at' => (int) $r['created_at']], JSON_UNESCAPED_UNICODE), "\n";
+        }
+        exit;
+
     // ---------- command center ----------
     case 'status':
         $me = require_client();
@@ -196,6 +238,7 @@ switch ($route) {
                 'brain'     => brain_mode(),
                 'engine'    => brain_engine(),
                 'laptop_online' => online_agent($uid) !== null,
+                'learning'  => skill_stats($uid),
                 'chain'     => brain_status($uid)['chain'],
                 'ready'     => brain_status($uid)['ready'],
                 'whatsapp'  => (string) cfg('whatsapp_token') !== '' && (string) cfg('whatsapp_phone_id') !== '',

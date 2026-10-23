@@ -202,7 +202,7 @@ let pendingList = [];
 const announced = new Set();
 let noteHook = null;
 
-const TABS = [['chat', 'Chat'], ['tasks', 'Tasks'], ['notes', 'Notes'], ['devices', 'Devices']];
+const TABS = [['chat', 'Chat'], ['tasks', 'Tasks'], ['notes', 'Notes'], ['devices', 'Devices'], ['skills', 'Seekha']];
 
 function note(text) {
   if (noteHook) noteHook(text);
@@ -251,7 +251,7 @@ function renderView() {
   document.getElementById('title').textContent = TABS.find(([id]) => id === tab)[1];
   const view = document.getElementById('view');
   view.replaceChildren();
-  ({ chat: viewChat, tasks: viewTasks, notes: viewNotes, devices: viewDevices })[tab](view);
+  ({ chat: viewChat, tasks: viewTasks, notes: viewNotes, devices: viewDevices, skills: viewSkills })[tab](view);
   tick();
 }
 
@@ -420,6 +420,7 @@ function buildHud(actions) {
       h('dl', { class: 'hud-kv' },
         h('dt', null, 'Brain'), h('dd', null, s.ai.chain.join(' → ')),
         h('dt', null, 'Laptop'), h('dd', { class: s.ai.laptop_online ? 'good' : 'bad' }, s.ai.laptop_online ? 'Online' : 'Offline'),
+        h('dt', null, 'Seekha'), h('dd', null, s.ai.learning.skills + ' skills \u00b7 ' + s.ai.learning.local_pct + '% khud'),
         h('dt', null, 'Voice'), h('dd', { class: SR ? 'good' : 'bad' }, SR ? 'Ready' : 'Browser me nahi'),
         h('dt', null, 'WhatsApp'), h('dd', null, s.ai.contacts + ' contacts' + (s.ai.whatsapp ? ' · API' : ' · tap mode'))),
       h('button', { class: 'talk', type: 'button', onclick: actions.talk, disabled: !SR }, wave, h('span', null, 'TALK TO JARVIS')),
@@ -746,6 +747,37 @@ function renderRecent(cmds) {
           : h('div', { class: 'muted' }, c.result)) : null),
       h('span', { class: 'tag' }, c.status));
   }) : [h('p', { class: 'muted' }, 'Abhi koi action nahi.')]));
+}
+
+// ---------- what Jarvis has learned ----------
+function viewSkills(view) {
+  const stats = h('div', { class: 'card' });
+  const list = h('div', { class: 'card' });
+  const err = h('div', { class: 'error', role: 'alert' });
+
+  async function load() {
+    const { skills, stats: s, min_seen: minSeen } = await api('skills');
+    stats.replaceChildren(
+      h('div', { class: 'kv-big' },
+        h('div', null, h('b', null, String(s.skills)), h('span', { class: 'muted' }, ' skills seekh chuka')),
+        h('div', null, h('b', null, s.local_pct + '%'), h('span', { class: 'muted' }, ' messages khud (bina AI) hue, pichle 30 din')),
+        h('div', null, h('b', null, String(s.learning)), h('span', { class: 'muted' }, ' seekh raha hai (' + minSeen + ' baar sahi dikhne par pakka hota hai)'))),
+      h('p', { class: 'muted' }, 'AI (teacher) ne kitne jawab diye: ' +
+        (Object.entries(s.by_provider).map(([k, v]) => k + ' ' + v).join(' \u00b7 ') || 'abhi koi nahi')),
+      h('a', { class: 'btn', href: 'api.php?r=brain_export', download: 'jarvis-training-data.jsonl' }, 'Training data download (.jsonl)'));
+    list.replaceChildren(...(skills.length ? skills.map((k) => h('div', { class: 'item' },
+      h('div', { class: 'grow' },
+        h('div', { class: 'mono' }, k.template),
+        h('div', { class: 'muted' }, k.does + ' \u00b7 dekha ' + k.seen_count + ' baar \u00b7 khud chalaya ' + k.used_count + ' baar'),
+        h('span', { class: 'tag' }, !k.enabled ? 'band' : k.active ? 'pakka (khud chalta hai)' : 'seekh raha hai')),
+      h('button', { class: 'ghost small', onclick: async () => { await api('skill_toggle', { id: k.id, enabled: !k.enabled }); load(); } }, k.enabled ? 'Band karo' : 'Chalu karo'),
+      h('button', { class: 'ghost small danger', onclick: async () => { await api('skill_delete', { id: k.id }); load(); } }, 'Bhool jao'))) : [
+      h('p', { class: 'muted' }, 'Abhi kuch nahi seekha. Jarvis se kaam karwao (jaise "mom ko call karo", "task jodo: ..."). Jo baat Gemini do baar ek jaisi samjhata hai, wo yahan aa jaati hai.')]));
+  }
+  page(view,
+    h('p', { class: 'muted' }, 'Jarvis har kaam Gemini (teacher) se samajhta hai aur yaad rakhta hai. Jo baat wo pakki seekh leta hai, usme agli baar AI ki zarurat nahi padti, aur wo turant hota hai. Naye ya lambe sawal ab bhi AI se jaate hain. Approval ke niyam skills par bhi pehle jaise hi lagte hain.'),
+    stats, h('h2', null, 'Seekhi hui baatein'), list, err);
+  load().catch((x) => { err.textContent = x.message; });
 }
 
 // ---------- boot ----------

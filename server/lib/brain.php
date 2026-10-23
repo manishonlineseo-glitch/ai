@@ -198,12 +198,30 @@ function apply_brain_plan(int $userId, string $userText, array $plan): array
     $ins = db()->prepare('INSERT INTO chat (user_id, role, content, created_at) VALUES (?,?,?,?)');
     $ins->execute([$userId, 'user', $userText, time()]);
     $ins->execute([$userId, 'assistant', $reply, time()]);
-    return ['reply' => $reply, 'actions' => ui_actions()];
+    $worked = true; // learnable only if every planned tool really ran
+    foreach ($notes as $n) {
+        $worked = $worked && !str_starts_with($n, 'Error') && !str_starts_with($n, 'Skipped');
+    }
+    return ['reply' => $reply, 'actions' => ui_actions(), '_worked' => $worked];
+}
+
+/** What the phone gets: internal fields removed. */
+function brain_public(array $r): array
+{
+    unset($r['_worked']);
+    return $r;
 }
 
 /** One chat turn through the configured brains. Returns ['reply','actions'] (instant) or ['job' => id] (the laptop is thinking). */
 function chat_with_brains(int $userId, string $text): array
 {
+    // 1. Something Jarvis already learned? Answer instantly, no AI call.
+    if ($plan = skill_match($userId, $text)) {
+        $res = apply_brain_plan($userId, $text, $plan);
+        skill_learn($userId, $text, 'skill', $plan, $res['_worked']);
+        return brain_public($res);
+    }
+    // 2. Otherwise ask the teachers in order, and learn from the answer.
     $errors = [];
     foreach (brain_chain() as $provider) {
         try {
@@ -216,7 +234,10 @@ function chat_with_brains(int $userId, string $text): array
                     }
                     $prompt = brain_prompt($userId, $text, online_agent($userId));
                     $raw = $provider === 'gemini' ? gemini_generate($prompt) : openai_generate($prompt);
-                    return apply_brain_plan($userId, $text, brain_parse($raw));
+                    $plan = brain_parse($raw);
+                    $res = apply_brain_plan($userId, $text, $plan);
+                    skill_learn($userId, $text, $provider, $plan, $res['_worked']);
+                    return brain_public($res);
                 case 'anthropic':
                     if (!brain_has_key('anthropic')) {
                         $errors[] = 'claude api: key nahi hai';
@@ -248,7 +269,10 @@ function finalize_brain(int $id): void
     if ($cmd['status'] !== 'done') {
         $final = ['error' => mb_substr((string) $cmd['result'], 0, 600) ?: 'Laptop ne jawab nahi diya'];
     } else {
-        $final = apply_brain_plan((int) $cmd['user_id'], (string) ($args['text'] ?? ''), brain_parse((string) $cmd['result']));
+        $plan = brain_parse((string) $cmd['result']);
+        $res = apply_brain_plan((int) $cmd['user_id'], (string) ($args['text'] ?? ''), $plan);
+        skill_learn((int) $cmd['user_id'], (string) ($args['text'] ?? ''), 'laptop', $plan, $res['_worked']);
+        $final = brain_public($res);
     }
     $pdo->prepare('UPDATE commands SET final = ? WHERE id = ?')->execute([json_encode($final, JSON_UNESCAPED_UNICODE), $id]);
 }

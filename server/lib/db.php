@@ -121,6 +121,29 @@ function migrate_tables(PDO $pdo): void
             type TEXT NOT NULL,
             created_at INTEGER NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS skills (
+            id INTEGER PRIMARY KEY,
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            template TEXT NOT NULL,
+            slots TEXT NOT NULL DEFAULT "[]",
+            plan TEXT NOT NULL,
+            reply TEXT NOT NULL DEFAULT "",
+            seen_count INTEGER NOT NULL DEFAULT 1,
+            used_count INTEGER NOT NULL DEFAULT 0,
+            enabled INTEGER NOT NULL DEFAULT 1,
+            created_at INTEGER NOT NULL,
+            last_used INTEGER,
+            UNIQUE (user_id, template)
+        );
+        CREATE TABLE IF NOT EXISTS brain_log (
+            id INTEGER PRIMARY KEY,
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            text TEXT NOT NULL,
+            provider TEXT NOT NULL,
+            plan TEXT NOT NULL,
+            ok INTEGER NOT NULL DEFAULT 1,
+            created_at INTEGER NOT NULL
+        );
         CREATE TABLE IF NOT EXISTS pair_codes (
             id INTEGER PRIMARY KEY,
             user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,

@@ -64,6 +64,17 @@ Each chat message goes to the first brain in `'brain_order'` that works; the oth
 The brain only returns a JSON plan; the server runs the tools with the usual approval rules. Note that tasks, notes and device
 names are part of the prompt, so they go to whichever provider answers (free API tiers may use data to improve the provider's products).
 
+## Jarvis learns (so the AI teacher is needed less and less)
+Every command goes through `lib/skills.php` first. If Jarvis already learned that kind of sentence it answers instantly with no AI call;
+otherwise the teacher (Gemini/OpenAI/laptop AI) makes the plan, the plan is logged, and when the same sentence produced the same plan
+twice (`'skill_min_seen' => 2`) and all tools worked, it becomes a **skill**: the sentence with its moving parts (contact, device,
+task text) as slots, plus the plan with the same slots. See and switch off skills in the **Seekha** tab.
+- Never learned: file-editing work, shutdown/restart, failed plans, long rewritten prompts. Skills run through the usual approval rules.
+- Learns repeatable commands (call, WhatsApp, YouTube, tasks, notes, PC status, window read...). Open-ended conversation and anything
+  new still needs a teacher; that is the honest limit of a rule-based learner.
+- **Seekha > Training data** downloads every teacher exchange as JSONL (`input` sentence, `output` plan): the data to fine-tune a small
+  local model later (for example on the laptop with Ollama), which is the way to need no teacher at all.
+
 ## Work on your laptop from your phone (Claude, Gemini, ChatGPT/Codex)
 The phone talks to Jarvis, Jarvis sends the job to the **PC agent**, and the agent runs an AI coding CLI headless
 in a project folder you allowed: Claude Code (`claude -p`), Gemini CLI (`gemini -p`) or Codex (`codex exec`, ChatGPT login).
