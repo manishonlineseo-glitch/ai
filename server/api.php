@@ -198,7 +198,8 @@ switch ($route) {
         if (too_many_failures()) {
             fail('Bahut galat koshishen. 15 minute baad try karo.', 429);
         }
-        $st = $pdo->prepare('SELECT id, user_id, name, type FROM pair_codes WHERE code_hash = ? AND expires_at > ? AND role = "agent"');
+        // An app can also redeem a code from the "Naya device jodo" card: the owner made it, it is one-time and expires in 15 minutes anyway.
+        $st = $pdo->prepare('SELECT id, user_id, name, type FROM pair_codes WHERE code_hash = ? AND expires_at > ?');
         $st->execute([pair_code_hash((string) ($in['code'] ?? '')), time()]);
         $pc = db_fetch($st);
         $used = false;

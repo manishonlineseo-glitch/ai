@@ -69,6 +69,15 @@ class SettingsActivity : Activity() {
 
         col.addView(label("2. Permissions", 17f, true))
         col.addView(label("Jitni zyada permission, utna zyada kaam Jarvis phone par kar sakta hai. Har ek ka kaam likha hai."))
+        col.addView(label("Agar 'App was denied access' / 'Restricted setting' likha aaye (APK bahar se install ki ho to Android aisa karta hai):", 13f, true))
+        col.addView(label("1) Neeche 'App info kholo' dabao  2) Upar kone me teen dot (\u22EE)  3) 'Allow restricted settings' dabao (PIN/fingerprint lagega)  4) Wapas aakar Allow dabao. " +
+            "Teen dot na dikhe to pehle ek baar Allow dabao (error aane do), phir App info me jaao.", 13f))
+        col.addView(Button(this).apply {
+            text = "App info kholo"
+            setOnClickListener {
+                startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName")))
+            }
+        })
         permsBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         col.addView(permsBox)
 
@@ -89,7 +98,7 @@ class SettingsActivity : Activity() {
         refresh()
     }
 
-    private class Perm(val title: String, val why: String, val granted: Boolean, val ask: () -> Unit)
+    private class Perm(val title: String, val why: String, val granted: Boolean, val restricted: Boolean = false, val ask: () -> Unit)
 
     private fun perms(): List<Perm> {
         val list = ArrayList<Perm>()
@@ -108,11 +117,11 @@ class SettingsActivity : Activity() {
             requestPermissions(arrayOf(Manifest.permission.CALL_PHONE), 3)
         })
         list.add(Perm("Display over other apps", "Background se YouTube/dialer apne aap kholne ke liye (Android iske bina rokta hai).",
-            Settings.canDrawOverlays(this)) {
+            Settings.canDrawOverlays(this), true) {
             startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName")))
         })
         list.add(Perm("All files access", "Purane screenshots dhundhne aur 'Jarvis Trash' me daalne ke liye. Kuch bhi delete nahi hota.",
-            Environment.isExternalStorageManager()) {
+            Environment.isExternalStorageManager(), true) {
             startActivity(Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION, Uri.parse("package:$packageName")))
         })
         val pm = getSystemService(POWER_SERVICE) as PowerManager
@@ -130,6 +139,7 @@ class SettingsActivity : Activity() {
             val row = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(0, dp(8), 0, dp(8)) }
             row.addView(label((if (p.granted) "✅ " else "❌ ") + p.title, 16f, true))
             row.addView(label(p.why, 13f))
+            if (!p.granted && p.restricted) row.addView(label("Agar error aaye: upar wale 'Allow restricted settings' steps karo.", 12f))
             if (!p.granted) row.addView(Button(this).apply {
                 text = "Allow"
                 setOnClickListener { p.ask() }
