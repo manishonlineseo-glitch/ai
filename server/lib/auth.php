@@ -107,7 +107,7 @@ function set_device_cookie(string $token): void
     ]);
 }
 
-function create_device(int $userId, string $name, string $type, string $role): string
+function create_device(int $userId, string $name, string $type, string $role, ?int $loginId = null): string
 {
     $count = (int) db()->query('SELECT COUNT(*) FROM devices WHERE user_id = ' . (int) $userId)->fetchColumn();
     if ($count >= 40) {
@@ -115,11 +115,11 @@ function create_device(int $userId, string $name, string $type, string $role): s
     }
     $token = new_token();
     db()->prepare(
-        'INSERT INTO devices (user_id, name, type, role, token_hash, created_at, last_seen, user_agent)
-         VALUES (?,?,?,?,?,?,?,?)'
+        'INSERT INTO devices (user_id, name, type, role, token_hash, created_at, last_seen, user_agent, login_id)
+         VALUES (?,?,?,?,?,?,?,?,?)'
     )->execute([
         $userId, $name, $type, $role, hash('sha256', $token), time(), time(),
-        substr($_SERVER['HTTP_USER_AGENT'] ?? '', 0, 200),
+        substr($_SERVER['HTTP_USER_AGENT'] ?? '', 0, 200), $loginId,
     ]);
     return $token;
 }

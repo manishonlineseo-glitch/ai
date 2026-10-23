@@ -180,6 +180,7 @@ function showAuth(setup) {
     h('input', { id: 'u', name: 'username', autocomplete: 'username', required: true }),
     h('label', { for: 'p' }, setup ? 'Password (kam se kam 12 akshar)' : 'Password'),
     h('input', { id: 'p', name: 'password', type: 'password', autocomplete: setup ? 'new-password' : 'current-password', required: true, minlength: setup ? 12 : 1 }),
+    setup ? null : h('p', { class: 'muted' }, 'Device ID se login kar rahe ho to neeche naam/type ignore hote hain; Devices tab wala naam use hota hai.'),
     h('label', { for: 'dn' }, 'Is device ka naam'),
     h('input', { id: 'dn', name: 'device_name', value: TYPE_LABEL[type], maxlength: 40, required: true }),
     h('label', null, 'Device type'),
@@ -553,6 +554,61 @@ function viewNotes(view) {
   });
 }
 
+// ---------- per-device IDs (username + password for each phone/TV/laptop) ----------
+function deviceIdsCard() {
+  const list = h('div');
+  let editing = null; // null = nothing open, 0 = new, number = that ID
+
+  function form(l) {
+    const err = h('div', { class: 'error', role: 'alert' });
+    const f = {
+      name: h('input', { value: l ? l.name : '', maxlength: 40, required: true, placeholder: 'Device ka naam, jaise iPhone Office' }),
+      type: typeSelect(l ? l.type : 'iphone'),
+      login: h('input', { value: l ? l.login_name : '', maxlength: 32, required: true, autocomplete: 'off', placeholder: 'Username, jaise iphone2', autocapitalize: 'none' }),
+      pw: h('input', { type: 'password', autocomplete: 'new-password', placeholder: l ? 'Naya password (khali = purana hi rahega)' : 'Password (10+ akshar, letter + number)', required: !l }),
+    };
+    const show = h('input', { type: 'checkbox', class: 'check', id: 'sp' + (l ? l.id : 'new'), onchange: (e) => { f.pw.type = e.target.checked ? 'text' : 'password'; } });
+    return h('form', { class: 'card', onsubmit: async (e) => {
+      e.preventDefault();
+      err.textContent = '';
+      try {
+        await api('device_login_save', { id: l ? l.id : 0, name: f.name.value, type: f.type.value, login_name: f.login.value, password: f.pw.value });
+        editing = null;
+        load();
+      } catch (x) { err.textContent = x.message; }
+    } },
+      h('label', null, 'Device ka naam'), f.name,
+      h('label', null, 'Device type'), f.type,
+      h('label', null, 'Username'), f.login,
+      h('label', null, 'Password'), f.pw,
+      h('div', { class: 'row', style: 'margin-bottom:10px' }, show, h('label', { for: 'sp' + (l ? l.id : 'new') }, 'Password dikhao')),
+      err,
+      h('div', { class: 'row wrap' },
+        h('button', { type: 'submit' }, 'Save'),
+        h('button', { type: 'button', class: 'ghost', onclick: () => { editing = null; load(); } }, 'Cancel')));
+  }
+
+  async function load() {
+    const { logins } = await api('device_logins');
+    list.replaceChildren(...[
+      ...logins.map((l) => editing === l.id ? form(l) : h('div', { class: 'item' },
+        h('div', { class: 'grow' },
+          h('div', null, l.name, ' ', h('span', { class: 'tag' }, TYPE_LABEL[l.type] || l.type)),
+          h('div', { class: 'muted' }, 'Username: ', h('span', { class: 'mono' }, l.login_name), l.last_seen ? ' · last seen ' + timeAgo(l.last_seen) : ' · abhi tak login nahi hua')),
+        h('button', { class: 'ghost small', onclick: () => { editing = l.id; load(); } }, 'Edit'),
+        h('button', { class: 'ghost small danger', onclick: async () => {
+          if (confirm(l.name + ' ka ID/password delete karein? Wo device logout ho jayega.')) { await api('device_login_delete', { id: l.id }); load(); }
+        } }, 'Delete'))),
+      logins.length || editing === 0 ? null : h('p', { class: 'muted' }, 'Abhi koi device ID nahi hai.'),
+      editing === 0 ? form(null) : h('button', { class: 'small', style: 'margin-top:10px', onclick: () => { editing = 0; load(); } }, '+ Naya device ID'),
+    ].filter(Boolean)); // replaceChildren would print a literal "null"
+  }
+  load();
+  return h('div', { class: 'card' },
+    h('p', { class: 'muted' }, 'Har phone/TV/laptop ka apna username aur password. Sab ek hi data dekhte hain. Password hash ho kar save hota hai, wapas dikhaya nahi ja sakta; badalna ho to Edit me naya daalo.'),
+    list);
+}
+
 // ---------- devices ----------
 let devicesBox = null;
 let recentBox = null;
@@ -582,11 +638,12 @@ function viewDevices(view) {
 
   page(view,
     h('h2', null, 'Mere devices'), devicesBox,
+    h('h2', null, 'Device ID aur Password'), deviceIdsCard(),
     h('h2', null, 'Naya device jodo (code se)'),
     h('div', { class: 'card' },
       h('p', { class: 'muted' }, 'Phone/TV par password type karne ki jagah ek baar ka code use karo.'),
       pairForm, pairOut),
-    h('h2', null, 'PC agent jodo'),
+    h('h2', null, 'PC agent jodo (sirf us laptop/desktop ke liye jise control karna hai)'),
     h('div', { class: 'card' },
       h('p', { class: 'muted' }, 'Jis laptop/desktop ko control karna hai, uska ek token banao. Token sirf ek baar dikhega.'),
       h('form', { class: 'row', onsubmit: async (e) => {

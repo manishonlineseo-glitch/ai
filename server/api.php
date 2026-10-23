@@ -78,15 +78,28 @@ switch ($route) {
         if (too_many_failures()) {
             fail('Bahut galat koshishen. 15 minute baad try karo.', 429);
         }
+        $login = trim((string) ($in['username'] ?? ''));
         $st = $pdo->prepare('SELECT * FROM users WHERE username = ?');
-        $st->execute([trim((string) ($in['username'] ?? ''))]);
+        $st->execute([$login]);
         $user = $st->fetch();
+        $dev = null; // a per-device ID (name + password set in the Devices tab)
+        if (!$user) {
+            $st = $pdo->prepare('SELECT * FROM device_logins WHERE login_name = ?');
+            $st->execute([$login]);
+            $dev = $st->fetch() ?: null;
+        }
         // Always run one hash check so timing doesn't reveal valid usernames.
-        $hash = $user['pass_hash'] ?? password_hash('dummy-password', PASSWORD_DEFAULT);
-        $ok = password_verify((string) ($in['password'] ?? ''), $hash) && $user;
+        $hash = $user['pass_hash'] ?? $dev['pass_hash'] ?? password_hash('dummy-password', PASSWORD_DEFAULT);
+        $ok = password_verify((string) ($in['password'] ?? ''), $hash) && ($user || $dev);
         if (!$ok) {
             record_failure();
             fail('Username ya password galat hai', 401);
+        }
+        if ($dev) {
+            // One device ID = one device: a new login replaces its older session.
+            $pdo->prepare('DELETE FROM devices WHERE login_id = ?')->execute([$dev['id']]);
+            set_device_cookie(create_device((int) $dev['user_id'], $dev['name'], device_type($dev['type']), 'client', (int) $dev['id']));
+            json_out(['ok' => true]);
         }
         set_device_cookie(create_device((int) $user['id'], clean_device_name($in['device_name'] ?? ''), device_type($in['device_type'] ?? ''), 'client'));
         json_out(['ok' => true]);
@@ -215,6 +228,69 @@ switch ($route) {
             $st = $pdo->prepare('DELETE FROM devices WHERE id = ? AND user_id = ?');
             $st->execute([$id, $me['user_id']]);
         }
+        json_out(['ok' => $st->rowCount() > 0]);
+
+    // ---------- per-device IDs: login name + password for each phone/TV/PC browser ----------
+    case 'device_logins':
+        $me = require_client();
+        $st = $pdo->prepare(
+            'SELECT l.id, l.login_name, l.name, l.type, l.created_at,
+                    (SELECT MAX(last_seen) FROM devices d WHERE d.login_id = l.id) AS last_seen
+             FROM device_logins l WHERE l.user_id = ? ORDER BY l.id'
+        );
+        $st->execute([$me['user_id']]);
+        json_out(['logins' => $st->fetchAll()]);
+
+    case 'device_login_save':
+        $me = require_client();
+        $id = (int) ($in['id'] ?? 0);
+        $loginName = trim((string) ($in['login_name'] ?? ''));
+        $pw = (string) ($in['password'] ?? '');
+        $name = clean_device_name($in['name'] ?? '');
+        if (!preg_match('/^[A-Za-z0-9_.-]{3,32}$/', $loginName)) {
+            fail('Username 3-32 akshar (a-z, 0-9, _ . -)');
+        }
+        $own = $pdo->prepare('SELECT COUNT(*) FROM users WHERE lower(username) = lower(?)');
+        $own->execute([$loginName]);
+        $dup = $pdo->prepare('SELECT COUNT(*) FROM device_logins WHERE login_name = ? AND id <> ?');
+        $dup->execute([$loginName, $id]);
+        if ((int) $own->fetchColumn() > 0 || (int) $dup->fetchColumn() > 0) {
+            fail('Ye username pehle se use me hai');
+        }
+        if ($pw !== '' || $id === 0) {
+            if (strlen($pw) < 10 || !preg_match('/[A-Za-z]/', $pw) || !preg_match('/\d/', $pw)) {
+                fail('Password kam se kam 10 akshar ka, usme letter aur number dono');
+            }
+        }
+        if ($id === 0) {
+            $cnt = $pdo->prepare('SELECT COUNT(*) FROM device_logins WHERE user_id = ?');
+            $cnt->execute([$me['user_id']]);
+            if ((int) $cnt->fetchColumn() >= 20) {
+                fail('Bahut saare device IDs hain');
+            }
+            $pdo->prepare('INSERT INTO device_logins (user_id, login_name, pass_hash, name, type, created_at) VALUES (?,?,?,?,?,?)')
+                ->execute([$me['user_id'], $loginName, password_hash($pw, PASSWORD_DEFAULT), $name, device_type($in['type'] ?? ''), time()]);
+            json_out(['ok' => true, 'id' => (int) $pdo->lastInsertId()]);
+        }
+        $st = $pdo->prepare('UPDATE device_logins SET login_name = ?, name = ?, type = ? WHERE id = ? AND user_id = ?');
+        $st->execute([$loginName, $name, device_type($in['type'] ?? ''), $id, $me['user_id']]);
+        if ($st->rowCount() === 0) {
+            fail('Device ID nahi mila', 404);
+        }
+        if ($pw !== '') {
+            $pdo->prepare('UPDATE device_logins SET pass_hash = ? WHERE id = ?')->execute([password_hash($pw, PASSWORD_DEFAULT), $id]);
+            // Password changed: that device must log in again.
+            $pdo->prepare('DELETE FROM devices WHERE login_id = ? AND id <> ?')->execute([$id, $me['id']]);
+        }
+        $pdo->prepare('UPDATE devices SET name = ?, type = ? WHERE login_id = ?')->execute([$name, device_type($in['type'] ?? ''), $id]);
+        json_out(['ok' => true, 'id' => $id]);
+
+    case 'device_login_delete':
+        $me = require_client();
+        $id = (int) ($in['id'] ?? 0);
+        $pdo->prepare('DELETE FROM devices WHERE login_id = ? AND id <> ?')->execute([$id, $me['id']]);
+        $st = $pdo->prepare('DELETE FROM device_logins WHERE id = ? AND user_id = ?');
+        $st->execute([$id, $me['user_id']]);
         json_out(['ok' => $st->rowCount() > 0]);
 
     case 'agent_create':
