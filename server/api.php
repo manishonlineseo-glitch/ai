@@ -1,6 +1,10 @@
 <?php
 declare(strict_types=1);
 
+// Errors go to a private log (data/ is closed to the web) so a 500 can always be explained.
+ini_set('log_errors', '1');
+ini_set('error_log', __DIR__ . '/data/php_errors.log');
+
 require __DIR__ . '/lib/db.php';
 require __DIR__ . '/lib/auth.php';
 require __DIR__ . '/lib/tools.php';
@@ -36,6 +40,59 @@ function device_type(mixed $t): string
     $t = (string) $t;
     return in_array($t, DEVICE_TYPES, true) ? $t : 'other';
 }
+
+function status_payload(array $me): array
+{
+    $pdo = db();
+    $uid = (int) $me['user_id'];
+    $st = $pdo->prepare(
+        'SELECT id, name, type, role, last_seen, cpu, ram, battery, metrics_at FROM devices
+         WHERE user_id = ? AND blocked = 0 ORDER BY role DESC, id'
+    );
+    $st->execute([$uid]);
+    $devices = [];
+    $agents = [];
+    foreach ($st->fetchAll() as $d) {
+        $online = time() - (int) $d['last_seen'] < 30;
+        $devices[] = ['name' => $d['name'], 'type' => $d['type'], 'role' => $d['role'], 'online' => $online, 'current' => (int) $d['id'] === (int) $me['id']];
+        if ($d['role'] === 'agent') {
+            $fresh = $online && time() - (int) $d['metrics_at'] < 60;
+            $agents[] = [
+                'name' => $d['name'], 'online' => $online,
+                'cpu' => $fresh && $d['cpu'] !== null ? (float) $d['cpu'] : null,
+                'ram' => $fresh && $d['ram'] !== null ? (float) $d['ram'] : null,
+                'battery' => $fresh && $d['battery'] !== null ? (float) $d['battery'] : null,
+            ];
+        }
+    }
+    $tasks = $pdo->prepare('SELECT id, title, category, status, assignee FROM tasks WHERE user_id = ? AND status <> "done" ORDER BY CASE status WHEN "doing" THEN 0 WHEN "review" THEN 1 ELSE 2 END, id DESC LIMIT 5');
+    $tasks->execute([$uid]);
+    $open = $pdo->prepare('SELECT COUNT(*) FROM tasks WHERE user_id = ? AND status <> "done"');
+    $open->execute([$uid]);
+    $pend = $pdo->prepare(
+        'SELECT (SELECT COUNT(*) FROM commands WHERE user_id = :u AND status = "awaiting_confirm")
+              + (SELECT COUNT(*) FROM messages_out WHERE user_id = :u AND status = "awaiting_confirm")'
+    );
+    $pend->execute([':u' => $uid]);
+    return [
+        'devices'    => $devices,
+        'agents'     => $agents,
+        'tasks'      => $tasks->fetchAll(),
+        'tasks_open' => (int) $open->fetchColumn(),
+        'pending'    => (int) $pend->fetchColumn(),
+        'ai'         => [
+            'model'     => (string) (cfg('model') ?: 'claude-sonnet-5-5'),
+            'key_set'   => (string) cfg('anthropic_api_key') !== '',
+            'brain'     => brain_mode(),
+            'engine'    => brain_engine(),
+            'laptop_online' => online_agent($uid) !== null,
+            'learning'  => skill_stats($uid),
+            'chain'     => brain_status($uid)['chain'],
+            'ready'     => brain_status($uid)['ready'],
+            'whatsapp'  => (string) cfg('whatsapp_token') !== '' && (string) cfg('whatsapp_phone_id') !== '',
+            'contacts'  => count(wa_contacts()),
+        ],
+    ];}
 
 switch ($route) {
     // ---------- session ----------
@@ -85,12 +142,12 @@ switch ($route) {
         $login = trim((string) ($in['username'] ?? ''));
         $st = $pdo->prepare('SELECT * FROM users WHERE username = ?');
         $st->execute([$login]);
-        $user = $st->fetch();
+        $user = db_fetch($st);
         $dev = null; // a per-device ID (name + password set in the Devices tab)
         if (!$user) {
             $st = $pdo->prepare('SELECT * FROM device_logins WHERE login_name = ?');
             $st->execute([$login]);
-            $dev = $st->fetch() ?: null;
+            $dev = db_fetch($st);
         }
         // Always run one hash check so timing doesn't reveal valid usernames.
         $hash = $user['pass_hash'] ?? $dev['pass_hash'] ?? password_hash('dummy-password', PASSWORD_DEFAULT);
@@ -115,7 +172,7 @@ switch ($route) {
         }
         $st = $pdo->prepare('SELECT id, user_id, name, type FROM pair_codes WHERE code_hash = ? AND expires_at > ?');
         $st->execute([pair_code_hash((string) ($in['code'] ?? '')), time()]);
-        $pc = $st->fetch();
+        $pc = db_fetch($st);
         $used = false;
         if ($pc) {
             $del = $pdo->prepare('DELETE FROM pair_codes WHERE id = ?');
@@ -197,55 +254,7 @@ switch ($route) {
     // ---------- command center ----------
     case 'status':
         $me = require_client();
-        $uid = (int) $me['user_id'];
-        $st = $pdo->prepare(
-            'SELECT id, name, type, role, last_seen, cpu, ram, battery, metrics_at FROM devices
-             WHERE user_id = ? AND blocked = 0 ORDER BY role DESC, id'
-        );
-        $st->execute([$uid]);
-        $devices = [];
-        $agents = [];
-        foreach ($st->fetchAll() as $d) {
-            $online = time() - (int) $d['last_seen'] < 30;
-            $devices[] = ['name' => $d['name'], 'type' => $d['type'], 'role' => $d['role'], 'online' => $online, 'current' => (int) $d['id'] === (int) $me['id']];
-            if ($d['role'] === 'agent') {
-                $fresh = $online && time() - (int) $d['metrics_at'] < 60;
-                $agents[] = [
-                    'name' => $d['name'], 'online' => $online,
-                    'cpu' => $fresh && $d['cpu'] !== null ? (float) $d['cpu'] : null,
-                    'ram' => $fresh && $d['ram'] !== null ? (float) $d['ram'] : null,
-                    'battery' => $fresh && $d['battery'] !== null ? (float) $d['battery'] : null,
-                ];
-            }
-        }
-        $tasks = $pdo->prepare('SELECT id, title, category, status, assignee FROM tasks WHERE user_id = ? AND status <> "done" ORDER BY CASE status WHEN "doing" THEN 0 WHEN "review" THEN 1 ELSE 2 END, id DESC LIMIT 5');
-        $tasks->execute([$uid]);
-        $open = $pdo->prepare('SELECT COUNT(*) FROM tasks WHERE user_id = ? AND status <> "done"');
-        $open->execute([$uid]);
-        $pend = $pdo->prepare(
-            'SELECT (SELECT COUNT(*) FROM commands WHERE user_id = :u AND status = "awaiting_confirm")
-                  + (SELECT COUNT(*) FROM messages_out WHERE user_id = :u AND status = "awaiting_confirm")'
-        );
-        $pend->execute([':u' => $uid]);
-        json_out([
-            'devices'    => $devices,
-            'agents'     => $agents,
-            'tasks'      => $tasks->fetchAll(),
-            'tasks_open' => (int) $open->fetchColumn(),
-            'pending'    => (int) $pend->fetchColumn(),
-            'ai'         => [
-                'model'     => (string) (cfg('model') ?: 'claude-sonnet-5-5'),
-                'key_set'   => (string) cfg('anthropic_api_key') !== '',
-                'brain'     => brain_mode(),
-                'engine'    => brain_engine(),
-                'laptop_online' => online_agent($uid) !== null,
-                'learning'  => skill_stats($uid),
-                'chain'     => brain_status($uid)['chain'],
-                'ready'     => brain_status($uid)['ready'],
-                'whatsapp'  => (string) cfg('whatsapp_token') !== '' && (string) cfg('whatsapp_phone_id') !== '',
-                'contacts'  => count(wa_contacts()),
-            ],
-        ]);
+        json_out(status_payload($me));
 
     // ---------- devices ----------
     case 'devices':
@@ -505,7 +514,7 @@ switch ($route) {
         $me = require_client();
         $st = $pdo->prepare('SELECT status, final, created_at FROM commands WHERE id = ? AND user_id = ? AND action = "brain_chat"');
         $st->execute([(int) ($_GET['id'] ?? 0), $me['user_id']]);
-        $row = $st->fetch();
+        $row = db_fetch($st);
         if (!$row) {
             fail('Nahi mila', 404);
         }
@@ -540,13 +549,17 @@ switch ($route) {
              WHERE user_id = ? ORDER BY id DESC LIMIT 20'
         );
         $st->execute([$me['user_id']]);
-        json_out(['commands' => $rows, 'messages' => $st->fetchAll()]);
+        $out = ['commands' => $rows, 'messages' => $st->fetchAll()];
+        if (($_GET['hud'] ?? '') === '1') {
+            $out['status'] = status_payload($me);
+        }
+        json_out($out);
 
     case 'command_result':
         $me = require_client();
         $st = $pdo->prepare('SELECT action, status, result FROM commands WHERE id = ? AND user_id = ?');
         $st->execute([(int) ($_GET['id'] ?? 0), $me['user_id']]);
-        $row = $st->fetch();
+        $row = db_fetch($st);
         if (!$row) {
             fail('Nahi mila', 404);
         }
@@ -583,9 +596,24 @@ switch ($route) {
         )->execute([time(), $agent['id'], time() - 2400, time() - 120]);
         $pdo->prepare('UPDATE commands SET status = "expired", updated_at = ? WHERE device_id = ? AND status IN ("pending","awaiting_confirm") AND created_at < ?')
             ->execute([time(), $agent['id'], time() - 600]);
+        // Long poll: hold the request up to `wait` seconds (max 20) until a command shows up, so the agent asks
+        // 3 times a minute instead of every 4 seconds. Fewer requests also keeps the host's firewall calm.
+        @set_time_limit(40);
+        $wait = min(max((int) ($_GET['wait'] ?? 0), 0), 20);
+        $until = time() + $wait;
         $st = $pdo->prepare('SELECT id, action, args FROM commands WHERE device_id = ? AND status = "pending" ORDER BY id LIMIT 5');
-        $st->execute([$agent['id']]);
-        $rows = $st->fetchAll();
+        do {
+            $st->execute([$agent['id']]);
+            $rows = $st->fetchAll();
+            $st->closeCursor();
+            if ($rows || time() >= $until) {
+                break;
+            }
+            sleep(1);
+        } while (true);
+        if ($wait > 0) { // heartbeat at the end of the wait too, so the PC never looks offline between polls
+            $pdo->prepare('UPDATE devices SET last_seen = ? WHERE id = ?')->execute([time(), $agent['id']]);
+        }
         $mark = $pdo->prepare('UPDATE commands SET status = "running", updated_at = ? WHERE id = ?');
         foreach ($rows as &$r) {
             $mark->execute([time(), $r['id']]);

@@ -149,7 +149,7 @@ function find_agent(int $userId, string $name): ?array
         'SELECT * FROM devices WHERE user_id = ? AND role = "agent" AND blocked = 0 AND lower(name) = lower(?)'
     );
     $st->execute([$userId, $name]);
-    return $st->fetch() ?: null;
+    return db_fetch($st);
 }
 
 /** Queue a command for a PC agent. Risky actions wait for the owner's approval. */
@@ -172,7 +172,7 @@ function wait_for_command(int $id, int $seconds): array
     $st = db()->prepare('SELECT status, result FROM commands WHERE id = ?');
     for ($i = 0; $i < $seconds * 2; $i++) {
         $st->execute([$id]);
-        $row = $st->fetch();
+        $row = db_fetch($st);
         if ($row && in_array($row['status'], ['done', 'failed'], true)) {
             return $row;
         }

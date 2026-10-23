@@ -63,7 +63,7 @@ function online_agent(int $userId): ?array
         'SELECT * FROM devices WHERE user_id = ? AND role = "agent" AND blocked = 0 AND last_seen > ? ORDER BY last_seen DESC LIMIT 1'
     );
     $st->execute([$userId, time() - 30]);
-    return $st->fetch() ?: null;
+    return db_fetch($st);
 }
 
 function brain_tool_names(): array
@@ -261,7 +261,7 @@ function finalize_brain(int $id): void
     $pdo = db();
     $st = $pdo->prepare('SELECT * FROM commands WHERE id = ? AND action = "brain_chat"');
     $st->execute([$id]);
-    $cmd = $st->fetch();
+    $cmd = db_fetch($st);
     if (!$cmd || $cmd['final'] !== null) {
         return;
     }

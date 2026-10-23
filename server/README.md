@@ -77,6 +77,13 @@ Results are written into the task log and announced in chat. **Report** tab: mor
 automatically (what finished today, what is pending, what needs your review); add daily routines such as "7:30 AI news".
 The scheduler runs when the PC agent is running or the web app is open (each calls `tick` about once a minute); a real cron on a VPS is better later.
 
+## Keeping the host's firewall calm (important)
+Hostinger's CDN firewall (`Server: hcdn`) answers with **403 Forbidden** or a **"Checking your browser" page** when one IP sends too many
+requests. Because of that: the PC agent uses a long poll (the server holds each request up to 18 s, about 3 requests a minute),
+the open app sends one combined request every 10 s, the scheduler tick is every 2 minutes, and the agent backs off for 2 minutes
+on a 403/429/503 or a non-JSON reply. Do not load-test the live site over HTTP. The database runs in WAL mode with a 10 s busy
+timeout and schema changes run once per version (`SCHEMA_VERSION` in lib/db.php); a 500 is logged to `data/php_errors.log`.
+
 ## Jarvis learns (so the AI teacher is needed less and less)
 Every command goes through `lib/skills.php` first. If Jarvis already learned that kind of sentence it answers instantly with no AI call;
 otherwise the teacher (Gemini/OpenAI/laptop AI) makes the plan, the plan is logged, and when the same sentence produced the same plan

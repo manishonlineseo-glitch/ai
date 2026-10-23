@@ -70,7 +70,7 @@ function current_device(): ?array
          WHERE d.token_hash = ? AND d.blocked = 0'
     );
     $st->execute([hash('sha256', $tok)]);
-    $dev = $st->fetch() ?: null;
+    $dev = db_fetch($st);
     if ($dev && time() - (int) $dev['last_seen'] > 10) {
         db()->prepare('UPDATE devices SET last_seen = ? WHERE id = ?')->execute([time(), $dev['id']]);
         $dev['last_seen'] = time();

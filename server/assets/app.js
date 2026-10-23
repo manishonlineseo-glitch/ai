@@ -242,8 +242,8 @@ function showApp() {
       h('div', { class: 'view', id: 'view' }))));
   renderView();
   clearInterval(timer);
-  timer = setInterval(tick, 4000);
-  setInterval(kickScheduler, 60000);
+  timer = setInterval(tick, 10000); // one combined request per 10 s while the page is visible
+  setInterval(kickScheduler, 120000);
   setTimeout(kickScheduler, 3000);
 }
 
@@ -274,10 +274,10 @@ function page(view, ...kids) {
 async function tick() {
   if (document.hidden || !state) return;
   try {
-    const { commands, messages } = await api('commands');
+    const { commands, messages, status } = await api('commands' + (hud ? '&hud=1' : ''));
     renderPending(commands, messages || []);
     announceFinished(commands);
-    refreshHud();
+    if (hud && status) hud.update(status);
     if (tab === 'devices') { renderRecent(commands); loadDevices(); }
     if (tab === 'tasks' && refreshTasks) refreshTasks();
   } catch (x) { if (x.status === 401) boot(); }

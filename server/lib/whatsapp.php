@@ -92,7 +92,7 @@ function decide_message(int $userId, int $id, bool $approve): array
     }
     $row = $pdo->prepare('SELECT recipient, body FROM messages_out WHERE id = ?');
     $row->execute([$id]);
-    $m = $row->fetch();
+    $m = db_fetch($row);
     [$ok, $res] = whatsapp_send($m['recipient'], $m['body']);
     $pdo->prepare('UPDATE messages_out SET status = ?, result = ?, updated_at = ? WHERE id = ?')
         ->execute([$ok ? 'sent' : 'failed', $res, time(), $id]);

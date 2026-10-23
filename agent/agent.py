@@ -63,7 +63,7 @@ def load_config():
     if len(cfg.get("token", "")) != 64:
         sys.exit("config.json me token galat hai (64 akshar ka hona chahiye).")
     cfg["server_url"] = url
-    cfg.setdefault("poll_seconds", 4)
+    cfg.setdefault("poll_seconds", 1)  # the server holds each poll up to 18 s, so this is only a pause between polls
     cfg.setdefault("apps", {})  # {"notepad": "C:\\Windows\\notepad.exe"}
     cfg.setdefault("projects", {})  # {"jarvis": "C:\\xampp\\htdocs\\ai"}: the only folders the AI CLIs may work in
     cfg.setdefault("ai_timeout_minutes", 30)
@@ -627,7 +627,7 @@ def main():
         stream.reconfigure(errors="replace")  # a console that cannot show a character must not crash result reporting
     cfg = load_config()
     s = requests.Session()
-    s.headers.update({"X-Agent-Token": cfg["token"], "X-Requested-With": "jarvis"})
+    s.headers.update({"X-Agent-Token": cfg["token"], "X-Requested-With": "jarvis", "User-Agent": "JarvisAgent/1.0"})
     base = cfg["server_url"] + "api.php?r="
     print("Jarvis agent chalu:", cfg["server_url"])
 
@@ -656,7 +656,7 @@ def main():
 
     def ticker():
         while True:
-            time.sleep(60)
+            time.sleep(120)
             try:
                 s.get(base + "tick", timeout=170)  # the server may run a news summary or report during this call
             except requests.RequestException:
@@ -673,9 +673,15 @@ def main():
             battery = psutil.sensors_battery()
             if battery:
                 params["bat"] = battery.percent
-            r = s.get(base + "agent_poll", params=params, timeout=15)
+            params["wait"] = 18
+            r = s.get(base + "agent_poll", params=params, timeout=40)
             if r.status_code == 401:
                 sys.exit("Server ne token reject kiya (block ya delete hua?). Agent band.")
+            if r.status_code in (403, 429, 503) or "json" not in r.headers.get("Content-Type", ""):
+                # the host's firewall asked for a pause or sent a "checking your browser" page: back off instead of hammering it
+                print(f"server ne roka (HTTP {r.status_code}); 2 minute ruk raha hoon", flush=True)
+                time.sleep(120)
+                continue
             r.raise_for_status()
             for cmd in r.json().get("commands", []):
                 if cmd["action"] in AI_ACTIONS or cmd["action"] in ("brain_chat", "screen_look", "window_read", "claude_sessions", "web_research"):

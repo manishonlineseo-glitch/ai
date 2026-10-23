@@ -31,7 +31,7 @@ function task_get(int $userId, int $id): ?array
 {
     $st = db()->prepare('SELECT * FROM tasks WHERE id = ? AND user_id = ?');
     $st->execute([$id, $userId]);
-    return $st->fetch() ?: null;
+    return db_fetch($st);
 }
 
 function task_add(int $userId, string $title, string $category = 'other', string $details = '', string $assignee = 'me', ?string $due = null): int
@@ -213,7 +213,7 @@ function task_apply_result(int $commandId): void
     $pdo = db();
     $st = $pdo->prepare('SELECT user_id, args, status, result FROM commands WHERE id = ? AND action = "web_research"');
     $st->execute([$commandId]);
-    $cmd = $st->fetch();
+    $cmd = db_fetch($st);
     $args = json_decode((string) ($cmd['args'] ?? ''), true) ?: [];
     if (!$cmd || empty($args['task_id'])) {
         return;

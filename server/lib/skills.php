@@ -168,7 +168,7 @@ function skill_learn(int $userId, string $text, string $provider, array $plan, b
     $planJson = json_encode($t['plan'], JSON_UNESCAPED_UNICODE);
     $st = $pdo->prepare('SELECT id, plan FROM skills WHERE user_id = ? AND template = ?');
     $st->execute([$userId, $t['template']]);
-    $row = $st->fetch();
+    $row = db_fetch($st);
     if (!$row) {
         $pdo->prepare('INSERT INTO skills (user_id, template, slots, plan, reply, created_at) VALUES (?,?,?,?,?,?)')
             ->execute([$userId, $t['template'], json_encode($t['slots']), $planJson, $t['reply'], time()]);

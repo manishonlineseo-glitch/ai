@@ -1,6 +1,8 @@
 <?php
 declare(strict_types=1);
 
+const SCHEMA_VERSION = 6;
+
 function cfg(?string $key = null)
 {
     static $c = null;
@@ -26,9 +28,32 @@ function db(): PDO
         PDO::ATTR_ERRMODE            => PDO::ERRMODE_EXCEPTION,
         PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
     ]);
-    $pdo->exec('PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;');
-    migrate($pdo);
+    // Many callers at once (PC agent every 4 s, each open app every 4 s, the scheduler): WAL lets readers and the one
+    // writer work side by side, and a writer waits up to 10 s for another writer instead of failing at once.
+    $pdo->exec('PRAGMA busy_timeout = 10000');
+    $pdo->exec('PRAGMA journal_mode = WAL');
+    $pdo->exec('PRAGMA synchronous = NORMAL');
+    $pdo->exec('PRAGMA foreign_keys = ON');
+    // Schema changes run once per version, not on every request (they take write locks).
+    if ((int) $pdo->query('PRAGMA user_version')->fetchColumn() < SCHEMA_VERSION) {
+        try {
+            migrate($pdo);
+        } catch (PDOException $e) { // another request migrated at the same moment
+            if (!str_contains($e->getMessage(), 'duplicate column') && !str_contains($e->getMessage(), 'locked')) {
+                throw $e;
+            }
+        }
+        $pdo->exec('PRAGMA user_version = ' . SCHEMA_VERSION);
+    }
     return $pdo;
+}
+
+/** One row (or null) and the read cursor is released at once, so the next write in this request can never trip over it. */
+function db_fetch(PDOStatement $st): ?array
+{
+    $row = $st->fetch();
+    $st->closeCursor();
+    return $row ?: null;
 }
 
 function migrate(PDO $pdo): void
