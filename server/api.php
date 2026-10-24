@@ -11,6 +11,7 @@ require __DIR__ . '/lib/tools.php';
 require __DIR__ . '/lib/whatsapp.php';
 require __DIR__ . '/lib/llm.php';
 require __DIR__ . '/lib/skills.php';
+require __DIR__ . '/lib/reflex.php';
 require __DIR__ . '/lib/tasks.php';
 require __DIR__ . '/lib/brain.php';
 require __DIR__ . '/lib/claude.php';

@@ -124,11 +124,11 @@ function brain_prompt(int $userId, string $text, ?array $agent): string
     $notes = array_map(fn($n) => ['id' => $n['id'], 'body' => mb_substr($n['body'], 0, 200)], $q->fetchAll());
     $projects = $agent && $agent['projects'] ? json_decode((string) $agent['projects'], true) : [];
 
-    $q = $pdo->prepare('SELECT role, content FROM chat WHERE user_id = ? ORDER BY id DESC LIMIT 10');
+    $q = $pdo->prepare('SELECT role, content FROM chat WHERE user_id = ? ORDER BY id DESC LIMIT 6');
     $q->execute([$userId]);
     $history = '';
     foreach (array_reverse($q->fetchAll()) as $m) {
-        $history .= ($m['role'] === 'user' ? 'User' : 'Jarvis') . ': ' . mb_substr($m['content'], 0, 600) . "\n";
+        $history .= ($m['role'] === 'user' ? 'User' : 'Jarvis') . ': ' . mb_substr($m['content'], 0, 300) . "\n";
     }
 
     $context = [
@@ -246,6 +246,11 @@ function brain_public(array $r): array
 /** One chat turn through the configured brains. Returns ['reply','actions'] (instant) or ['job' => id] (the laptop is thinking). */
 function chat_with_brains(int $userId, string $text): array
 {
+    // 0. Everyday commands with an unmistakable meaning: planned by rules, instant.
+    if ($plan = reflex_match($userId, $text)) {
+        $res = apply_brain_plan($userId, $text, $plan);
+        return brain_public($res);
+    }
     // 1. Something Jarvis already learned? Answer instantly, no AI call.
     if ($plan = skill_match($userId, $text)) {
         $res = apply_brain_plan($userId, $text, $plan);
