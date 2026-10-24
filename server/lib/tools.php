@@ -5,7 +5,8 @@ const AI_ENGINES = ['claude', 'gemini', 'codex'];
 const PC_ACTIONS = [
     'cpu_status', 'speak', 'open_url', 'open_app', 'lock', 'shutdown', 'restart', 'cancel_shutdown',
     'claude_read', 'claude_work', 'gemini_read', 'gemini_work', 'codex_read', 'codex_work',
-    'screen_look', 'claude_sessions', 'window_read', 'web_research',
+    'screen_look', 'claude_sessions', 'window_read', 'web_research', 'chrome_profiles',
+    'ui_control', 'vault_ask', 'vault_fill', 'vault_sites', 'operate', 'call_run', 'call_selftest',
     // run on the Android app (a device of type android), not on a PC
     'phone_status', 'phone_notify', 'phone_open_url', 'phone_youtube_play', 'phone_call', 'phone_scan_files', 'phone_trash_files',
 ];
@@ -19,6 +20,9 @@ const DEFAULT_AUTO_ACTIONS = [
     'claude_sessions', // reads the laptop's own Claude Code session records, no AI involved
     'window_read', // copies a window's text (no screenshot) and has the owner's own AI explain it
     'web_research', // read-only: a web-searching AI in an empty folder, no files or shell
+    'chrome_profiles', // read-only: lists the Chrome profiles (names/emails) on the laptop
+    // the owner chose a free hand on the laptop: the agent itself refuses bank/payment/password windows
+    'ui_control', 'operate', 'vault_ask', 'vault_fill', 'vault_sites',
     'phone_status', 'phone_notify', 'phone_youtube_play', 'phone_scan_files', // harmless: report, notify, play a song, list files
     // phone_call and phone_trash_files always wait for a tap; phone_open_url only opens known sites without asking
 ];
@@ -51,13 +55,13 @@ function is_ai_action(string $action): bool
 /** Actions that take a while and whose answer is announced in chat when done. */
 function is_long_action(string $action): bool
 {
-    return is_ai_action($action) || in_array($action, ['screen_look', 'claude_sessions', 'window_read', 'cpu_status', 'web_research'], true);
+    return is_ai_action($action) || in_array($action, ['screen_look', 'claude_sessions', 'window_read', 'cpu_status', 'web_research', 'operate', 'call_run'], true);
 }
 
 function needs_approval(string $action, array $args): bool
 {
     $auto = cfg('no_confirm_actions');
-    if (in_array($action, is_array($auto) ? $auto : DEFAULT_AUTO_ACTIONS, true)) {
+    if (in_array($action, is_array($auto) ? $auto : DEFAULT_AUTO_ACTIONS, true) || in_array($action, authority_list(), true)) {
         return false;
     }
     if ($action === 'open_url' || $action === 'phone_open_url') {
@@ -90,7 +94,11 @@ function clean_pc_args(string $action, array $in): array
             if (!$p || !in_array(strtolower($p['scheme'] ?? ''), ['http', 'https'], true) || empty($p['host']) || strlen($url) > 500) {
                 throw new InvalidArgumentException('url http(s) wala hona chahiye');
             }
-            return ['url' => $url];
+            $profile = trim((string) ($in['profile'] ?? ''));
+            if ($profile !== '' && !preg_match('/^(Default|Profile [0-9]{1,3})$/', $profile)) {
+                throw new InvalidArgumentException('profile "Default" ya "Profile 12" jaisa hona chahiye');
+            }
+            return $profile !== '' ? ['url' => $url, 'profile' => $profile] : ['url' => $url];
         case 'open_app':
             $app = trim((string) ($in['app'] ?? ''));
             if (!preg_match('/^[A-Za-z0-9 _.\-]{1,40}$/', $app)) {
@@ -176,9 +184,71 @@ function clean_pc_args(string $action, array $in): array
                 throw new InvalidArgumentException('text 1-300 akshar ka chahiye');
             }
             return ['text' => $text];
+        case 'ui_control':
+            $steps = $in['ops'] ?? null;
+            if (!is_array($steps) || !$steps || count($steps) > 25) {
+                throw new InvalidArgumentException('ops 1-25 steps ki list ho');
+            }
+            return ['ops' => clean_ui_ops($steps)];
+        case 'operate':
+            $goal = trim((string) ($in['goal'] ?? ''));
+            if ($goal === '' || mb_strlen($goal) > 1500) {
+                throw new InvalidArgumentException('goal 1-1500 akshar ka chahiye');
+            }
+            return ['goal' => $goal, 'window' => trim((string) ($in['window'] ?? '')), 'max_steps' => min(max((int) ($in['max_steps'] ?? 15), 1), 30)];
+        case 'call_selftest':
+            return ['lead_id' => (int) ($in['lead_id'] ?? 0)];
+        case 'call_run':
+            return ['max_calls' => min(max((int) ($in['max_calls'] ?? 5), 1), 50), 'voice' => in_array($in['voice'] ?? '', ['Kore', 'Aoede', 'Leda', 'Zephyr', 'Charon', 'Puck', 'Fenrir', 'Orus'], true) ? $in['voice'] : 'Kore'];
+        case 'vault_ask':
+        case 'vault_fill':
+            $site = trim((string) ($in['site'] ?? ''));
+            if (!preg_match('/^[A-Za-z0-9 ._\-]{1,60}$/', $site)) {
+                throw new InvalidArgumentException('site ka naam galat hai');
+            }
+            return $action === 'vault_fill' ? ['site' => $site, 'submit' => !isset($in['submit']) || !empty($in['submit'])] : ['site' => $site];
         default:
             return [];
     }
+}
+
+/** Steps the laptop may perform like a person: focus a window, click a named control, type, press a key combo, wait, read. */
+function clean_ui_ops(array $steps): array
+{
+    $out = [];
+    foreach ($steps as $s) {
+        if (!is_array($s)) {
+            continue;
+        }
+        $op = (string) ($s['op'] ?? '');
+        switch ($op) {
+            case 'focus':
+                $out[] = ['op' => 'focus', 'window' => mb_substr(trim((string) ($s['window'] ?? '')), 0, 60)];
+                break;
+            case 'click':
+                $out[] = isset($s['x'], $s['y']) ? ['op' => 'click', 'x' => (int) $s['x'], 'y' => (int) $s['y']] : ['op' => 'click', 'name' => mb_substr(trim((string) ($s['name'] ?? '')), 0, 80)];
+                break;
+            case 'type':
+                $out[] = ['op' => 'type', 'text' => mb_substr((string) ($s['text'] ?? ''), 0, 3000), 'enter' => !empty($s['enter'])];
+                break;
+            case 'key':
+                $keys = strtolower(trim((string) ($s['keys'] ?? '')));
+                if (!preg_match('/^[a-z0-9+ ]{1,40}$/', $keys) || preg_match('/(^|\+)(win|windows|cmd|meta)(\+|$)|alt\+f4|ctrl\+alt\+del|ctrl\+shift\+esc/', $keys)) {
+                    throw new InvalidArgumentException('ye key combo allowed nahi: ' . $keys);
+                }
+                $out[] = ['op' => 'key', 'keys' => $keys];
+                break;
+            case 'wait':
+                $out[] = ['op' => 'wait', 'seconds' => min(max((float) ($s['seconds'] ?? 1), 0.2), 30)];
+                break;
+            case 'read':
+                $out[] = ['op' => 'read', 'window' => mb_substr(trim((string) ($s['window'] ?? '')), 0, 60), 'max_chars' => min(max((int) ($s['max_chars'] ?? 6000), 500), 20000)];
+                break;
+            default:
+                throw new InvalidArgumentException('unknown op: ' . $op);
+        }
+    }
+    return $out;
 }
 
 function find_agent(int $userId, string $name): ?array
@@ -326,6 +396,27 @@ function claude_tools(): array
              'contact' => ['type' => 'string', 'description' => 'Contact name from list_contacts'],
              'text'    => ['type' => 'string'],
          ], 'required' => ['contact', 'text']]],
+        ['name' => 'project_note',
+         'description' => 'Write down real progress so you never forget: what was done, what comes next, a decision. One short line each. Use it after finishing or learning something about a project.',
+         'input_schema' => ['type' => 'object', 'properties' => [
+             'project' => ['type' => 'string', 'description' => 'Project name'],
+             'text'    => ['type' => 'string'],
+             'kind'    => ['type' => 'string', 'enum' => ['status', 'next', 'done', 'decision', 'fact']],
+         ], 'required' => ['project', 'text']]],
+        ['name' => 'project_overview',
+         'description' => 'Read what is known about one project (or all): status, next steps, decisions. Use when the user asks where a project stands.',
+         'input_schema' => ['type' => 'object', 'properties' => ['project' => ['type' => 'string']], 'required' => []]],
+        ['name' => 'remember_style',
+         'description' => 'Remember how the owner likes things done (a lasting preference or habit, e.g. "reports short Hinglish me", "SEO posts always as draft first"). Use when they tell you how to work.',
+         'input_schema' => ['type' => 'object', 'properties' => ['text' => ['type' => 'string']], 'required' => ['text']]],
+        ['name' => 'chrome_profile_set',
+         'description' => 'Remember what a Chrome profile is for (e.g. Profile 23 = biharichatkara.in WordPress). profile can be the folder, the name or the email.',
+         'input_schema' => ['type' => 'object', 'properties' => [
+             'profile' => ['type' => 'string'], 'purpose' => ['type' => 'string'], 'sites' => ['type' => 'string', 'description' => 'comma separated domains'],
+         ], 'required' => ['profile', 'purpose']]],
+        ['name' => 'set_authority',
+         'description' => 'Only when the owner clearly says to stop asking approval for a kind of action (or to ask again): allow=true/false for that action. Power off/restart, deleting files and phone calls can never be allowed.',
+         'input_schema' => ['type' => 'object', 'properties' => ['action' => ['type' => 'string', 'enum' => PC_ACTIONS], 'allow' => ['type' => 'boolean']], 'required' => ['action', 'allow']]],
         ['name' => 'pc_command',
          'description' => 'Send an action to one of the user\'s PCs (a device with role agent). Risky actions are '
             . 'held until the user approves them in the app; say so instead of claiming they ran.',
@@ -333,6 +424,7 @@ function claude_tools(): array
              'device' => ['type' => 'string', 'description' => 'Exact PC agent name from list_devices'],
              'action' => ['type' => 'string', 'enum' => PC_ACTIONS],
              'url'    => ['type' => 'string', 'description' => 'For open_url'],
+             'profile' => ['type' => 'string', 'description' => 'For open_url: Chrome profile folder (Default, Profile 23...) from CHROME PROFILES; omit for the default profile'],
              'app'    => ['type' => 'string', 'description' => 'For open_app: a name from the agent\'s allowlist'],
              'text'   => ['type' => 'string', 'description' => 'For speak'],
              'question' => ['type' => 'string', 'description' => 'For web_research: what to research on the web (also for screen_look: what to find out)'],
@@ -343,6 +435,10 @@ function claude_tools(): array
              'hours'    => ['type' => 'integer', 'description' => 'For claude_sessions: how many past hours to include (default 24)'],
              'question' => ['type' => 'string', 'description' => 'For screen_look: what to find out from the screenshot (optional)'],
              'window'   => ['type' => 'string', 'description' => 'For screen_look/window_read: part of a window title (e.g. "Claude") to bring to the front before the screenshot (optional)'],
+             'goal'     => ['type' => 'string', 'description' => 'For operate: the whole job to do on the PC like a person (e.g. "open Claude, attach C:\\x\\a.php and ask it to audit it, then read the answer")'],
+             'max_steps' => ['type' => 'integer', 'description' => 'For operate: step limit (default 15)'],
+             'site'     => ['type' => 'string', 'description' => 'For vault_ask/vault_fill: site name the owner stored a login for'],
+             'ops'      => ['type' => 'array', 'description' => 'For ui_control: steps {op: focus|click|type|key|wait|read, window, name, text, enter, keys, seconds}', 'items' => ['type' => 'object']],
              'engine'   => ['type' => 'string', 'enum' => AI_ENGINES, 'description' => 'For screen_look: which AI reads the screenshot (default: the brain engine)'],
              'project'  => ['type' => 'string', 'description' => 'For the *_read/*_work actions: project name from the PC agent\'s allowlist'],
              'prompt'   => ['type' => 'string', 'description' => 'For the *_read/*_work actions: the full, self-contained instruction for the AI CLI on that PC'],
@@ -406,6 +502,21 @@ function run_tool(string $name, array $in, int $userId): string
                 $st->execute([$userId]);
                 $rows = $st->fetchAll();
                 return $rows ? implode("\n", array_map(fn($r) => '#' . $r['id'] . ': ' . $r['body'], $rows)) : 'No notes.';
+
+            case 'project_note':
+                return 'Saved note #' . memory_add($userId, (string) ($in['project'] ?? ''), (string) ($in['kind'] ?? 'status'), (string) ($in['text'] ?? ''));
+
+            case 'project_overview':
+                return memory_overview($userId, isset($in['project']) && trim((string) $in['project']) !== '' ? (string) $in['project'] : null);
+
+            case 'remember_style':
+                return 'Yaad rakh liya #' . memory_add($userId, '*', 'style', (string) ($in['text'] ?? ''));
+
+            case 'chrome_profile_set':
+                return chrome_profile_set($userId, (string) ($in['profile'] ?? ''), (string) ($in['purpose'] ?? ''), (string) ($in['sites'] ?? ''));
+
+            case 'set_authority':
+                return authority_set((string) ($in['action'] ?? ''), !empty($in['allow']), (string) ($GLOBALS['jarvis_user_text'] ?? ''));
 
             case 'list_devices':
                 $st = $pdo->prepare('SELECT name, type, role, last_seen, blocked FROM devices WHERE user_id = ? ORDER BY id');

@@ -150,3 +150,32 @@ function gemini_vision(string $prompt, string $mime, string $b64): string
     }
     throw new RuntimeException('Gemini: ' . mb_substr($last, 0, 260));
 }
+
+/** Text to speech with Gemini. Returns raw 16-bit mono PCM at 24 kHz (base64) or throws. voice: Kore (female), Charon/Puck (male)... */
+function gemini_tts(string $text, string $voice = 'Kore', string $style = ''): string
+{
+    if ((string) cfg('gemini_api_key') === '') {
+        throw new RuntimeException('gemini_api_key set nahi hai');
+    }
+    $last = '';
+    foreach (['gemini-3.8-flash-lite-tts', 'gemini-3.8-flash-tts', 'gemini-2.5-flash-preview-tts'] as $m) {
+        [$code, $j, $err] = llm_http('https://generativelanguage.googleapis.com/v1beta/models/' . $m . ':generateContent', ['x-goog-api-key: ' . (string) cfg('gemini_api_key')], [
+            'contents'         => [['role' => 'user', 'parts' => [['text' => $text]]]],
+            'generationConfig' => ['responseModalities' => ['AUDIO'], 'speechConfig' => ['voiceConfig' => ['prebuiltVoiceConfig' => ['voiceName' => $voice]]]],
+        ], 30);
+        $b64 = $j['candidates'][0]['content']['parts'][0]['inlineData']['data'] ?? '';
+        if ($code === 200 && $b64 !== '') {
+            return (string) $b64;
+        }
+        $last .= ($last ? ' | ' : '') . $m . ': ' . mb_substr(llm_error_text($j, $code, $err), 0, 80);
+    }
+    throw new RuntimeException('TTS: ' . $last);
+}
+
+/** Speech to text for a short WAV clip (what the other person said on the phone). Returns the text ("" when only noise). */
+function gemini_stt(string $wavB64, string $lang = 'Hindi/Hinglish'): string
+{
+    $out = gemini_vision("Transcribe exactly what the person says in this phone-call clip ($lang). Reply with only the words spoken, in the language/script they used (Hindi in Roman letters is fine). If there is only silence, noise or no clear speech, reply with exactly: [silence]", 'audio/wav', $wavB64);
+    $out = trim($out);
+    return stripos($out, '[silence]') !== false ? '' : $out;
+}

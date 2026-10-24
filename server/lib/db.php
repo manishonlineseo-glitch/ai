@@ -1,7 +1,7 @@
 <?php
 declare(strict_types=1);
 
-const SCHEMA_VERSION = 8;
+const SCHEMA_VERSION = 11;
 
 /**
  * A single-value read (COUNT(*), MAX(id)...) leaves the statement open until it is reset, and in SQLite an open read keeps
@@ -105,6 +105,45 @@ function migrate(PDO $pdo): void
 {
     migrate_tables($pdo);
     $pdo->exec('
+        CREATE TABLE IF NOT EXISTS campaigns (
+            id INTEGER PRIMARY KEY,
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            name TEXT NOT NULL, assistant_name TEXT NOT NULL DEFAULT "Jarvis", company TEXT NOT NULL DEFAULT "",
+            language TEXT NOT NULL DEFAULT "Hinglish", script TEXT NOT NULL DEFAULT "", rules TEXT NOT NULL DEFAULT "",
+            hour_from INTEGER NOT NULL DEFAULT 10, hour_to INTEGER NOT NULL DEFAULT 19,
+            status TEXT NOT NULL DEFAULT "paused", created_at INTEGER NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS leads (
+            id INTEGER PRIMARY KEY,
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            campaign_id INTEGER NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
+            name TEXT NOT NULL DEFAULT "", phone TEXT NOT NULL, gender TEXT NOT NULL DEFAULT "", extra TEXT NOT NULL DEFAULT "{}",
+            status TEXT NOT NULL DEFAULT "new", summary TEXT, attempts INTEGER NOT NULL DEFAULT 0,
+            next_call_at INTEGER, last_call_at INTEGER, created_at INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_leads_camp ON leads (campaign_id, status);
+        CREATE TABLE IF NOT EXISTS call_log (
+            id INTEGER PRIMARY KEY,
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            lead_id INTEGER NOT NULL REFERENCES leads(id) ON DELETE CASCADE,
+            started_at INTEGER NOT NULL, duration INTEGER NOT NULL DEFAULT 0,
+            transcript TEXT NOT NULL DEFAULT "", summary TEXT NOT NULL DEFAULT "", outcome TEXT NOT NULL DEFAULT ""
+        );
+    ');
+    $pdo->exec('
+        CREATE TABLE IF NOT EXISTS memory (
+            id INTEGER PRIMARY KEY,
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            scope TEXT NOT NULL DEFAULT "*", kind TEXT NOT NULL, text TEXT NOT NULL, created_at INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_memory_user ON memory (user_id, scope, id);
+        CREATE TABLE IF NOT EXISTS chrome_profiles (
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            dir TEXT NOT NULL, name TEXT, email TEXT, gaia TEXT, purpose TEXT, sites TEXT, updated_at INTEGER,
+            PRIMARY KEY (user_id, dir)
+        );
+    ');
+    $pdo->exec('
         CREATE TABLE IF NOT EXISTS library (
             id INTEGER PRIMARY KEY,
             user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -134,6 +173,10 @@ function migrate(PDO $pdo): void
     $havePair = array_column($pdo->query('PRAGMA table_info(pair_codes)')->fetchAll(), 'name');
     if (!in_array('role', $havePair, true)) {
         $pdo->exec('ALTER TABLE pair_codes ADD COLUMN role TEXT NOT NULL DEFAULT "client"');
+    }
+    $haveCamp = array_column($pdo->query('PRAGMA table_info(campaigns)')->fetchAll(), 'name');
+    if (!in_array('assistant_gender', $haveCamp, true)) {
+        $pdo->exec('ALTER TABLE campaigns ADD COLUMN assistant_gender TEXT NOT NULL DEFAULT "f"');
     }
     $haveCmd = array_column($pdo->query('PRAGMA table_info(commands)')->fetchAll(), 'name');
     if (!in_array('final', $haveCmd, true)) {

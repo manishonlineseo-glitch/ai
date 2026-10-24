@@ -3,3 +3,6 @@ psutil>=6.0
 pillow>=10.4
 pyttsx3>=2.90
 uiautomation>=2.0
+numpy>=1.26
+soundcard>=0.4.3
+websockets>=13

@@ -164,10 +164,17 @@ function brain_prompt(int $userId, string $text, ?array $agent): string
         . "update_task changes status/notes, run_task hands an EXISTING task (id from task_board) to Jarvis; add_task with assignee jarvis already starts it, so never run_task a task you just created. Social tasks only make drafts; never claim anything was posted.\n"
         . "- Small things run on their own; file edits, shutdown/restart and unknown links need the user's tap: say so.\n"
         . "- Never claim an action happened (the server appends the real result). Never mention keys or tokens.\n"
+        . "- You are the owner's smart employee: remember every project. After real progress or a new fact call project_note (short); when they say how they like to work call remember_style; when they tell you what a Chrome profile is for call chrome_profile_set. "
+        . "Pick the right Chrome profile for a site/account from CHROME PROFILES (open_url with profile); if two fit, ask once. "
+        . "Do small and routine things yourself without asking; ask the owner only for something big, risky, irreversible, or that publishes/sends to other people, and then explain what, why and what could go wrong in two lines. "
+        . "During long work say briefly what is running and that you are waiting for the result. "
+        . "Laptop like a person: pc_command operate (goal = the whole job, e.g. open the Claude app, attach a file, ask for an audit, wait, read the answer) does multi-step work on screen; ui_control for exact clicks/typing; open_url with profile for a Chrome profile. "
+        . "Logins: vault_ask opens a window ON THE LAPTOP where the owner types the password (never ask for passwords in chat); vault_fill types a saved one. Leads: pc_command call_run phones the due leads of active campaigns (needs the owner's approval unless allowed). Phone calls always start by saying you are an AI assistant.\n"
         . knowledge_style_rules()
         . (med_is_medical($text) ? med_rules(med_profile_get($userId)) : (med_profile_get($userId) ? med_rules(med_profile_get($userId)) : ''))
         . "\n"
         . knowledge_context($text)
+        . memory_context($userId, $text)
         . library_context($userId, $text)
         . med_context($text, med_profile_get($userId) !== null)
         . "CONVERSATION:\n" . ($history ?: "(none)\n") . "User: " . $text . "\n";
@@ -212,6 +219,7 @@ function brain_parse(string $raw): array
 /** Run the planned tools (same approval rules as always), store the chat turn, return what the phone should show. */
 function apply_brain_plan(int $userId, string $userText, array $plan): array
 {
+    $GLOBALS['jarvis_user_text'] = $userText;
     $GLOBALS['jarvis_no_wait'] = true;
     $allowed = brain_tool_names();
     $notes = [];

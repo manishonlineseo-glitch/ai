@@ -101,6 +101,7 @@ class MainActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
+        Thread { try { Updater.check(this) } catch (_: Exception) { } }.start()
         if (Prefs.token(this) != null && !PhoneAgentService.running) {
             startForegroundService(Intent(this, PhoneAgentService::class.java))
         }

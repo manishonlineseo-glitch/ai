@@ -124,6 +124,10 @@ class SettingsActivity : Activity() {
             Environment.isExternalStorageManager(), true) {
             startActivity(Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION, Uri.parse("package:$packageName")))
         })
+        list.add(Perm("Auto-update", "Jarvis server par naya app aate hi ye app khud update ho jaye (aapko baar baar APK nahi chadhani padegi).",
+            packageManager.canRequestPackageInstalls(), true) {
+            startActivity(Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:$packageName")))
+        })
         val pm = getSystemService(POWER_SERVICE) as PowerManager
         list.add(Perm("Battery optimization band", "Taaki Android Jarvis ko background me band na kare.",
             pm.isIgnoringBatteryOptimizations(packageName)) {

@@ -227,7 +227,7 @@ let pendingList = [];
 const announced = new Set();
 let noteHook = null;
 
-const TABS = [['chat', 'Chat'], ['tasks', 'Tasks'], ['report', 'Report'], ['notes', 'Notes'], ['devices', 'Devices'], ['skills', 'Seekha'], ['library', 'Library']];
+const TABS = [['chat', 'Chat'], ['tasks', 'Tasks'], ['report', 'Report'], ['notes', 'Notes'], ['devices', 'Devices'], ['skills', 'Seekha'], ['library', 'Library'], ['leads', 'Leads']];
 
 function note(text) {
   if (noteHook) noteHook(text);
@@ -279,7 +279,7 @@ function renderView() {
   document.getElementById('title').textContent = TABS.find(([id]) => id === tab)[1];
   const view = document.getElementById('view');
   view.replaceChildren();
-  ({ chat: viewChat, tasks: viewTasks, report: viewReport, notes: viewNotes, devices: viewDevices, skills: viewSkills, library: viewLibrary })[tab](view);
+  ({ chat: viewChat, tasks: viewTasks, report: viewReport, notes: viewNotes, devices: viewDevices, skills: viewSkills, library: viewLibrary, leads: viewLeads })[tab](view);
   tick();
 }
 
@@ -295,6 +295,7 @@ async function tick() {
     const { commands, messages, status } = await api('commands' + (hud ? '&hud=1' : ''));
     renderPending(commands, messages || []);
     announceFinished(commands);
+    announceProgress(commands);
     if (hud && status) hud.update(status);
     if (tab === 'devices') { renderRecent(commands); loadDevices(); }
     if (tab === 'tasks' && refreshTasks) refreshTasks();
@@ -308,6 +309,8 @@ function describe(c) {
     return ENGINE_LABEL[engine] + (mode === 'work' ? ' kaam (files badal sakta hai)' : ' padhai (read-only)') +
       ' · ' + c.device + ' · project ' + a.project + (a.continue ? ' · pichla session jaari' : '') + '\n' + a.prompt;
   }
+  if (c.action === 'operate') return 'Laptop par kaam: ' + (a.goal || '') + ' · ' + c.device;
+  if (c.action === 'ui_control') return 'Laptop par click/type (' + ((a.ops || []).length) + ' steps) · ' + c.device;
   if (c.action === 'claude_sessions') return 'Claude sessions dekho · ' + c.device;
   if (c.action === 'window_read') {
     return 'Window ka text padho · ' + c.device + (a.window ? ' · window: ' + a.window : ' · aage wali window') + (a.question ? '\n' + a.question : '');
@@ -321,7 +324,7 @@ function describe(c) {
 
 const AI_ACTION = /^(claude|gemini|codex)_(read|work)$/;
 const ENGINE_LABEL = { claude: 'Claude', gemini: 'Gemini', codex: 'ChatGPT (Codex)' };
-const isLong = (action) => AI_ACTION.test(action) || ['screen_look', 'claude_sessions', 'window_read', 'cpu_status'].includes(action); // answers that arrive later, in chat
+const isLong = (action) => AI_ACTION.test(action) || ['screen_look', 'claude_sessions', 'window_read', 'cpu_status', 'operate', 'call_run'].includes(action); // answers that arrive later, in chat
 
 // Finished AI tasks are announced in the chat (or shown when the chat is next opened).
 let finishedSeen = null;
@@ -336,6 +339,20 @@ function announceFinished(cmds) {
     const text = (c.status === 'done' ? 'Laptop ka kaam khatam (' + c.device + '):\n' : 'Laptop ka kaam fail hua (' + c.device + '):\n') + (c.result || '') + more;
     if (noteHook) note(text); else missedNotes.push(text);
   }
+}
+
+// While a laptop job is running (operate), its latest progress line appears in the chat.
+const progressSeen = new Map();
+let progressReady = false;
+function announceProgress(cmds) {
+  for (const c of cmds) {
+    if (!['operate', 'call_run'].includes(c.action) || c.status !== 'running' || !c.result) continue;
+    const last = c.result.trim().split('\n').pop();
+    if (progressSeen.get(c.id) === last) continue;
+    progressSeen.set(c.id, last);
+    if (progressReady) { if (noteHook) note('\u23F3 ' + last); }
+  }
+  progressReady = true;
 }
 
 function renderPending(cmds, msgs) {
@@ -1108,4 +1125,126 @@ function viewLibrary(view) {
     h('button', { onclick: () => input.click() }, 'File jodo'), input, status);
   view.append(box, err, list);
   load().catch((x) => { err.textContent = x.message; });
+}
+
+// ---------- Leads: campaigns, scripts, lead lists and the call simulator ----------
+function viewLeads(view) {
+  const err = h('div', { class: 'error', role: 'alert' });
+  const camps = h('div');
+  const body = h('div');
+  const STATUS = { new: 'nayi', calling: 'call chal rahi', interested: 'interested', callback: 'baad me call', not_interested: 'interested nahi', do_not_call: 'call mat karo', wrong_number: 'galat number', no_answer: 'uthaya nahi', done: 'ho gaya' };
+  let sel = null;
+
+  const field = (label, el) => h('label', { style: 'display:block;margin:8px 0' }, h('span', { class: 'muted' }, label), el);
+
+  async function loadCamps() {
+    const { campaigns } = await api('campaigns');
+    camps.replaceChildren(h('div', { class: 'card' },
+      h('div', { class: 'row', style: 'justify-content:space-between' }, h('h3', null, 'Campaigns'), h('button', { class: 'small', onclick: () => openCampaign({}) }, '+ Naya')),
+      campaigns.length ? null : h('p', { class: 'muted' }, 'Abhi koi campaign nahi. Naya banao: naam, script, aur leads ki Excel/CSV.'),
+      ...campaigns.map((c) => h('div', { class: 'row', style: 'justify-content:space-between;margin:8px 0;gap:8px' },
+        h('div', null, h('b', null, c.name), ' ', h('span', { class: 'muted' }, c.status === 'active' ? 'chal raha' : 'ruka hua'),
+          h('div', { class: 'muted' }, c.leads + ' leads, ' + c.pending + ' baaki, ' + c.interested + ' interested')),
+        h('button', { class: 'small ghost', onclick: () => openCampaign(c) }, 'Kholo')))));
+  }
+
+  async function openCampaign(c) {
+    sel = c;
+    const f = {
+      name: h('input', { value: c.name || '', maxlength: 80 }),
+      assistant: h('input', { value: c.assistant_name || 'Jarvis', maxlength: 40 }),
+      gender: h('select', null, h('option', { value: 'f', selected: c.assistant_gender !== 'm' }, 'Ladki (rahi hoon)'), h('option', { value: 'm', selected: c.assistant_gender === 'm' }, 'Ladka (raha hoon)')),
+      company: h('input', { value: c.company || '', maxlength: 80, placeholder: 'jaise: Udaypur Group' }),
+      language: h('input', { value: c.language || 'Hinglish', maxlength: 30 }),
+      script: h('textarea', { rows: 9, maxlength: 8000, placeholder: 'Kya bolna hai: offer, sawal, jawab. Jaise: "Hum real estate me plot bechte hain, rate 15 lakh se..., budget poochho, site visit ka time lo."' }),
+      rules: h('textarea', { rows: 3, maxlength: 2000, placeholder: 'Khaas niyam (optional): jaise "rate mat batana, sirf visit ke liye bulao"' }),
+      from: h('input', { type: 'number', min: 0, max: 23, value: c.hour_from ?? 10, style: 'width:70px' }),
+      to: h('input', { type: 'number', min: 1, max: 24, value: c.hour_to ?? 19, style: 'width:70px' }),
+      active: h('input', { type: 'checkbox', class: 'check', checked: c.status === 'active' }),
+    };
+    f.script.value = c.script || '';
+    f.rules.value = c.rules || '';
+    const save = async () => {
+      err.textContent = '';
+      try {
+        const r = await api('campaign_save', { id: c.id, name: f.name.value, assistant_name: f.assistant.value, assistant_gender: f.gender.value, company: f.company.value, language: f.language.value,
+          script: f.script.value, rules: f.rules.value, hour_from: +f.from.value, hour_to: +f.to.value, status: f.active.checked ? 'active' : 'paused' });
+        c.id = r.id;
+        await loadCamps();
+        openCampaign({ ...c, id: r.id, name: f.name.value, assistant_name: f.assistant.value, assistant_gender: f.gender.value, company: f.company.value, language: f.language.value, script: f.script.value, rules: f.rules.value, hour_from: +f.from.value, hour_to: +f.to.value, status: f.active.checked ? 'active' : 'paused' });
+      } catch (x) { err.textContent = x.message; }
+    };
+    const file = h('input', { type: 'file', accept: '.csv,.xlsx', style: 'display:none' });
+    file.addEventListener('change', async () => {
+      if (!file.files[0] || !c.id) { err.textContent = 'Pehle campaign save karo'; return; }
+      const fd = new FormData();
+      fd.append('file', file.files[0]);
+      fd.append('campaign_id', c.id);
+      const r = await fetch('api.php?r=leads_import', { method: 'POST', headers: { 'X-Requested-With': 'jarvis' }, body: fd });
+      const j = await r.json().catch(() => ({ error: 'Server ne galat jawab diya' }));
+      err.textContent = r.ok ? '' : (j.error || 'Import fail');
+      if (r.ok) { err.textContent = ''; alert(j.added + ' leads jude, ' + j.duplicates + ' duplicate, ' + j.skipped_bad_number + ' galat number chhode'); }
+      file.value = '';
+      openCampaign(c);
+    });
+    const leadsBox = h('div', { class: 'card' });
+    const sim = simulator(c);
+    body.replaceChildren(
+      h('div', { class: 'card' },
+        h('h3', null, c.id ? 'Campaign: ' + c.name : 'Naya campaign'),
+        field('Campaign ka naam', f.name), field('Assistant ka naam (ye naam bolega)', f.assistant), field('Assistant ki awaaz', f.gender), field('Company / aapka naam', f.company),
+        field('Bhasha', f.language), field('Script', f.script), field('Khaas niyam', f.rules),
+        h('div', { class: 'row', style: 'gap:8px;align-items:center' }, h('span', { class: 'muted' }, 'Calling ka time (ghanta):'), f.from, h('span', null, 'se'), f.to, h('span', null, 'tak')),
+        h('div', { class: 'row', style: 'gap:8px;margin:8px 0' }, f.active, h('span', null, 'Campaign chalu (laptop calls kar sakta hai)')),
+        h('p', { class: 'muted' }, 'Har call ki shuruaat me assistant batata hai ki wo AI assistant hai. Ye hamesha rahega. Sirf unhe call jinhone enquiry ki; "call mat karo" bolne wale aage kabhi nahi.'),
+        h('div', { class: 'row', style: 'gap:8px' }, h('button', { onclick: save }, 'Save'),
+          c.id ? h('button', { class: 'ghost', onclick: () => file.click() }, 'Leads ki Excel/CSV jodo (naam, phone, gender)') : null, file,
+          c.id ? h('button', { class: 'ghost', onclick: async () => { if (confirm('Campaign aur uske saare leads hata dein?')) { await api('campaign_delete', { id: c.id }); body.replaceChildren(); loadCamps(); } } }, 'Hatao') : null)),
+      c.id ? sim : null, c.id ? leadsBox : null);
+    if (c.id) loadLeads(leadsBox, c.id);
+  }
+
+  async function loadLeads(box, cid) {
+    const { leads } = await api('leads&campaign_id=' + cid);
+    box.replaceChildren(h('h3', null, 'Leads (' + leads.length + ')'),
+      leads.length ? null : h('p', { class: 'muted' }, 'Excel jodo: pehli row me header (name, phone, gender).'),
+      ...leads.map((l) => h('div', { style: 'margin:8px 0;border-bottom:1px solid var(--line);padding-bottom:6px' },
+        h('div', { class: 'row', style: 'justify-content:space-between;gap:6px' },
+          h('div', null, h('b', null, l.name || l.phone), ' ', h('span', { class: 'muted' }, l.phone + ' \u00b7 ' + (STATUS[l.status] || l.status) + (l.attempts ? ' \u00b7 ' + l.attempts + ' call' : ''))),
+          h('div', { class: 'row', style: 'gap:4px' },
+            h('button', { class: 'small ghost', onclick: async () => { const { calls } = await api('lead_calls&id=' + l.id); alert(calls.length ? calls.map((c) => new Date(c.started_at * 1000).toLocaleString() + '\n' + (c.summary || '') + '\n\n' + c.transcript).join('\n----\n') : 'Abhi koi call nahi hui'); } }, 'Baat'),
+            h('button', { class: 'small ghost', onclick: async () => { await api('lead_update', { id: l.id, status: 'do_not_call' }); loadLeads(box, cid); } }, 'Call mat karo'))),
+        l.summary ? h('div', { class: 'muted' }, l.summary) : null)));
+  }
+
+  // Test the script without any phone: you type what the person says, the call agent answers.
+  function simulator(c) {
+    const log = h('div', { style: 'max-height:260px;overflow:auto;margin:8px 0' });
+    const input = h('input', { placeholder: 'Lead kya bolta hai? (jaise: haan boliye / rate kya hai / mujhe nahi chahiye)', style: 'width:100%' });
+    const transcript = [];
+    const gender = h('select', null, h('option', { value: 'm' }, 'sir'), h('option', { value: 'f' }, 'mam'), h('option', { value: '' }, 'pata nahi'));
+    const name = h('input', { value: 'Rahul', style: 'width:110px' });
+    const add = (who, text) => { log.append(h('div', { class: 'msg ' + (who === 'agent' ? 'assistant' : 'user') }, (who === 'agent' ? (c.assistant_name || 'Jarvis') + ': ' : 'Lead: ') + text)); log.scrollTop = log.scrollHeight; };
+    const turn = async (said) => {
+      const r = await api('call_simulate', { campaign_id: c.id, lead_name: name.value, gender: gender.value, transcript, said });
+      transcript.push({ who: 'agent', text: r.say });
+      add('agent', r.say + (r.end ? '  [call khatam' + (r.outcome ? ': ' + r.outcome : '') + ']' : ''));
+      speak(r.say, true);
+    };
+    const start = h('button', { class: 'small', onclick: async () => { transcript.length = 0; log.replaceChildren(); try { await turn(''); } catch (x) { err.textContent = x.message; } } }, 'Naya test call');
+    input.addEventListener('keydown', async (e) => {
+      if (e.key !== 'Enter' || !input.value.trim()) return;
+      const said = input.value.trim();
+      input.value = '';
+      transcript.push({ who: 'lead', text: said });
+      add('lead', said);
+      try { await turn(said); } catch (x) { err.textContent = x.message; }
+    });
+    return h('div', { class: 'card' }, h('h3', null, 'Script ka test (bina phone ke)'),
+      h('p', { class: 'muted' }, 'Pehle save karo, phir "Naya test call". Aap lead ban kar likho, assistant jawab dega.'),
+      h('div', { class: 'row', style: 'gap:8px;align-items:center' }, start, h('span', { class: 'muted' }, 'Lead:'), name, gender), log, input);
+  }
+
+  view.append(err, camps, body);
+  loadCamps().catch((x) => { err.textContent = x.message; });
 }

@@ -3,6 +3,6 @@ rem Builds dist\JarvisAgent.exe (one file, no console window). Needs the agent v
 cd /d "%~dp0"
 venv\Scripts\python.exe -m PyInstaller --noconfirm --clean --onefile --noconsole --name JarvisAgent ^
   --hidden-import pystray._win32 --hidden-import pyttsx3.drivers --hidden-import pyttsx3.drivers.sapi5 ^
-  --collect-submodules comtypes --collect-all uiautomation --collect-all pystray jarvis_app.py
+  --collect-submodules comtypes --collect-all uiautomation --collect-all pystray --collect-all soundcard --hidden-import callrun --hidden-import ops --collect-submodules websockets jarvis_app.py
 echo.
 echo Done: %~dp0dist\JarvisAgent.exe

@@ -23,6 +23,7 @@ class PhoneAgentService : Service() {
     }
 
     private var worker: Thread? = null
+    private var lastUpdateCheck = 0L
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -75,6 +76,10 @@ class PhoneAgentService : Service() {
             val base = Prefs.server(this).trimEnd('/') + "/api.php?r="
             val headers = mapOf("X-Agent-Token" to token)
             try {
+                if (System.currentTimeMillis() - lastUpdateCheck > 3_600_000L) { // once an hour: is there a newer app on the server?
+                    lastUpdateCheck = System.currentTimeMillis()
+                    try { Updater.check(this) } catch (_: Exception) { /* next hour */ }
+                }
                 val r = Http.request("GET", base + "agent_poll&wait=18" + metrics() + "&projects=", headers, null, 40_000)
                 when {
                     r.code == 401 -> {

@@ -322,6 +322,9 @@ def main():
         return setup_window()
     if "--settings" in sys.argv:
         return settings_window()
+    if "--vault" in sys.argv:
+        import ops
+        return ops.vault_window(sys.argv[sys.argv.index("--vault") + 1])
     if not single_instance():
         return
     run_tray()

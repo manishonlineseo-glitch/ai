@@ -24,10 +24,14 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.environ.get("JARVIS_AGENT_HOME") or HERE
 CONFIG_PATH = os.path.join(DATA_DIR, "config.json")
 
+import ops  # noqa: E402  (keyboard/mouse control, vault, operate loop, updater)
+
 ENGINES = ("claude", "gemini", "codex")
 AI_ACTIONS = {f"{e}_{m}" for e in ENGINES for m in ("read", "work")}
 ALL_ACTIONS = {"cpu_status", "speak", "open_url", "open_app", "lock", "shutdown", "restart", "cancel_shutdown",
-               "brain_chat", "screen_look", "claude_sessions", "window_read", "web_research"} | AI_ACTIONS
+               "brain_chat", "screen_look", "claude_sessions", "window_read", "web_research",
+               "chrome_profiles", "ui_control", "vault_ask", "vault_fill", "vault_sites", "operate", "call_run", "call_selftest"} | AI_ACTIONS
+NEWER_ACTIONS = {"chrome_profiles", "ui_control", "vault_ask", "vault_fill", "vault_sites", "operate", "call_run", "call_selftest"}  # added in 1.1: an older config.json gets them too
 STATE_PATH = os.path.join(DATA_DIR, "state.json")
 
 # Headless AI coding CLIs. Override any key under "claude" / "gemini" / "codex" in config.json.
@@ -75,7 +79,7 @@ def load_config():
         cfg[engine] = merged
     # *_work (can edit files) stays off unless you list it in allowed_actions yourself.
     default_allowed = ALL_ACTIONS - {f"{e}_work" for e in ENGINES}
-    cfg["allowed_actions"] = set(cfg.get("allowed_actions", default_allowed)) & ALL_ACTIONS
+    cfg["allowed_actions"] = (set(cfg.get("allowed_actions", default_allowed)) | NEWER_ACTIONS) & ALL_ACTIONS
     return cfg
 
 
@@ -599,7 +603,30 @@ def run_action(cfg, action, args):
         return cpu_status()
     if action == "speak":
         return speak(str(args.get("text", ""))[:300])
+    if action == "chrome_profiles":
+        return ops.chrome_profiles()
+    if action == "ui_control":
+        return ops.ui_control(args)
+    if action == "vault_ask":
+        return ops.vault_ask(args)
+    if action == "vault_fill":
+        return ops.vault_fill(args)
+    if action == "vault_sites":
+        return ops.vault_sites()
+    if action == "operate":
+        return ops.operate(args)
+    if action == "call_run":
+        import callrun
+        return callrun.call_run(args)
+    if action == "call_selftest":
+        import callrun
+        return callrun.selftest(args)
     if action == "open_url":
+        profile = str(args.get("profile") or "").strip()
+        if profile:
+            if urlparse(str(args.get("url", ""))).scheme not in ("http", "https"):
+                raise ValueError("sirf http/https allowed")
+            return ops.open_url_profile(str(args.get("url", "")), profile)
         return open_url(str(args.get("url", "")))
     if action == "open_app":
         path = cfg["apps"].get(str(args.get("app", "")))
@@ -635,6 +662,7 @@ def run(cfg, stop=None, on_status=None):
     ai_queue = queue.Queue(maxsize=5)  # AI tasks run one after another; the poll loop (and the online dot) never blocks
 
     def execute(cmd):
+        ops.CTX.update(session=s, base=base, cmd=cmd["id"])
         try:
             result, ok = run_action(cfg, cmd["action"], cmd.get("args") or {}), True
         except Exception as e:  # report every failure back to the server
@@ -667,13 +695,14 @@ def run(cfg, stop=None, on_status=None):
                 pass
 
     threading.Thread(target=ticker, daemon=True).start()
+    ops.start_updater(s, base, stop)
     threading.Thread(target=make_worker(ai_queue), daemon=True).start()
     threading.Thread(target=make_worker(brain_queue), daemon=True).start()
 
     while not stop.is_set():
         try:
             params = {"cpu": psutil.cpu_percent(interval=None), "ram": psutil.virtual_memory().percent,
-                      "projects": ",".join(cfg["projects"].keys())}
+                      "projects": ",".join(cfg["projects"].keys()), "v": ops.VERSION}
             battery = psutil.sensors_battery()
             if battery:
                 params["bat"] = battery.percent
@@ -692,7 +721,7 @@ def run(cfg, stop=None, on_status=None):
             r.raise_for_status()
             status("online")
             for cmd in r.json().get("commands", []):
-                if cmd["action"] in AI_ACTIONS or cmd["action"] in ("brain_chat", "screen_look", "window_read", "claude_sessions", "web_research"):
+                if cmd["action"] in AI_ACTIONS or cmd["action"] in ("brain_chat", "screen_look", "window_read", "claude_sessions", "web_research", "operate", "call_run", "call_selftest"):
                     try:
                         (brain_queue if cmd["action"] == "brain_chat" else ai_queue).put_nowait(cmd)
                     except queue.Full:
