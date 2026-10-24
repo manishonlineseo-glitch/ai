@@ -1,0 +1,14 @@
+Third-party playbooks in this folder are copied unmodified (apart from shortening) from open-source repositories.
+Each file's first line names its source and license; all are MIT or Apache-2.0.
+
+Sources:
+- https://github.com/coreyhaines31/marketingskills (MIT)
+- https://github.com/alirezarezvani/claude-skills (MIT)
+- https://github.com/AgriciDaniel/claude-seo (MIT)
+- https://github.com/AgriciDaniel/claude-ads (MIT)
+- https://github.com/wondelai/skills (MIT)
+- https://github.com/znyupup/ai-video-editing-skill (MIT)
+- https://github.com/designrique/ai-graphic-design-skill (MIT)
+- https://github.com/bergside/awesome-design-skills (MIT)
+- https://github.com/Zulut30/Wordpress-skills (MIT)
+- https://github.com/anthropics/skills (Apache-2.0)

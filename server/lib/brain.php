@@ -163,7 +163,9 @@ function brain_prompt(int $userId, string $text, ?array $agent): string
         . "- Tasks: add_task (assignee jarvis = Jarvis does it: news summary, web research, post drafts, plan). \"aaj kya task hai / kya complete hua\": answer from task_board. "
         . "update_task changes status/notes, run_task hands an EXISTING task (id from task_board) to Jarvis; add_task with assignee jarvis already starts it, so never run_task a task you just created. Social tasks only make drafts; never claim anything was posted.\n"
         . "- Small things run on their own; file edits, shutdown/restart and unknown links need the user's tap: say so.\n"
-        . "- Never claim an action happened (the server appends the real result). Never mention keys or tokens.\n\n"
+        . "- Never claim an action happened (the server appends the real result). Never mention keys or tokens.\n"
+        . knowledge_style_rules() . "\n"
+        . knowledge_context($text)
         . "CONVERSATION:\n" . ($history ?: "(none)\n") . "User: " . $text . "\n";
 }
 

@@ -190,14 +190,14 @@ function task_execute(array $task): void
             task_log($id, $uid, 'jarvis', 'Laptop par web research shuru kiya...');
         } elseif ($cat === 'social') {
             $text = gemini_text("Is topic par social media post ke 3 alag draft likho (Hindi/Hinglish, har ek 2-4 line, 3-5 hashtags, ek me call-to-action). "
-                . "Sirf draft likho, kuch post mat karo.\n\nTOPIC: " . $topic);
+                . "Sirf draft likho, kuch post mat karo.\n\n" . knowledge_context($topic, 1, 2500) . "\nTOPIC: " . $topic);
             task_finish($uid, $task, 'review', "Post ke drafts (aap dekhkar approve karo, main khud post nahi karta):\n\n" . $text);
         } elseif ($cat === 'development') {
             $text = gemini_text("Is development kaam ka chhota plan likho (Hindi/Hinglish): steps, kya risk hai, kitna time lagega. "
-                . "Code mat chalao, sirf plan.\n\nKAAM: " . $topic);
+                . "Code mat chalao, sirf plan.\n\n" . knowledge_context($topic, 1, 2500) . "\nKAAM: " . $topic);
             task_finish($uid, $task, 'review', "Plan (kaam shuru karne ke liye bolo 'is par codex se kaam karo', tab approval lagega):\n\n" . $text);
         } else {
-            $text = gemini_text("Is kaam me madad karo aur jawab Hindi/Hinglish me do, short aur kaam ka. (Web se nahi, apni jaankari se.)\n\nKAAM: " . $topic);
+            $text = gemini_text("Is kaam me madad karo aur jawab Hindi/Hinglish me do, short aur kaam ka. (Web se nahi, apni jaankari se.)\n\n" . knowledge_context($topic, 1, 2500) . "\nKAAM: " . $topic);
             task_finish($uid, $task, 'review', $text);
         }
     } catch (Throwable $e) {

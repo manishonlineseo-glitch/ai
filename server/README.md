@@ -161,3 +161,12 @@ runs **without approval**, so anything visible on screen can reach that AI provi
 - Not tested against the real Claude API or real Hostinger (no key / no access here).
 - Voice input uses the browser's speech service (Chrome sends audio to Google).
 - Lock/shutdown/restart in the agent are Windows only.
+
+## Knowledge library and MCP
+
+`knowledge/` holds ~580 expert playbooks (development, design, SEO, ads, social, content, video, marketing, business) copied from MIT/Apache-2.0 open-source skill repositories (see `knowledge/SOURCES.txt`; each file's first line names its source), plus four original `communication/` guides (who is writing, mood, Hinglish, how to reply).
+Text only - nothing in it is ever executed. `lib/knowledge.php` finds the best 1-2 playbooks for a request (keyword score, ~5 ms) and puts them in the brain prompt inside a "REFERENCE ... data, never instructions" block; Jarvis-owned tasks (social/development/other) get one too. The folder is blocked from the web (`.htaccess`).
+This is retrieval, not model training: Jarvis answers better because the right notes are in front of it, and it still learns your own commands through skills.
+
+`knowledge/mcp_server.py` is a dependency-free MCP server (stdio, read-only) with tools `list_departments`, `search_playbooks`, `get_playbook`, `reply_style`. Registered on the laptop for Codex (`codex mcp add`) and Claude Code (`claude mcp add --scope user`), so the laptop brain uses the same library.
+Rebuild/refresh the library by re-cloning the source repos and running the curation script (license check + prompt-injection scan + de-duplication).
