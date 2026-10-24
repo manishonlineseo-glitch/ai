@@ -26,6 +26,14 @@ function reflex_match(int $userId, string $text): ?array
         return ['reply' => 'Aaj ' . date('d F Y, l') . ' hai.', 'actions' => []];
     }
 
+    // exam practice: "anatomy ka mcq pucho" / "quiz" -> a real past-paper question; then "a/b/c/d" checks it
+    if ($quiz = reflex_quiz($userId, $t)) {
+        return $quiz;
+    }
+    if ($label = med_profile_detect($userId, $text)) {
+        return ['reply' => "Theek hai, aap $label hain. Ab main usi level par aasan Hinglish me samjhaunga. Practice ke liye bolo: \"anatomy ka mcq pucho\" (ya pharmacology, medicine, surgery...).", 'actions' => []];
+    }
+
     $pc = online_agent($userId);
     $pcName = $pc ? (string) $pc['name'] : null;
 
@@ -69,4 +77,64 @@ function reflex_match(int $userId, string $text): ?array
         }
     }
     return null;
+}
+
+const QUIZ_SUBJECTS = [
+    'anatomy' => 'Anatomy', 'physiology' => 'Physiology', 'biochemistry' => 'Biochemistry', 'pathology' => 'Pathology', 'pharmacology' => 'Pharmacology',
+    'microbiology' => 'Microbiology', 'forensic' => 'Forensic Medicine', 'psm' => 'Social & Preventive Medicine', 'community' => 'Social & Preventive Medicine',
+    'ent' => 'ENT', 'eye' => 'Ophthalmology', 'ophthalmology' => 'Ophthalmology', 'medicine' => 'Medicine', 'surgery' => 'Surgery', 'pediatrics' => 'Pediatrics',
+    'paediatrics' => 'Pediatrics', 'gynae' => 'Gynaecology & Obstetrics', 'gynaecology' => 'Gynaecology & Obstetrics', 'obstetrics' => 'Gynaecology & Obstetrics',
+    'obg' => 'Gynaecology & Obstetrics', 'orthopedics' => 'Orthopaedics', 'orthopaedics' => 'Orthopaedics', 'psychiatry' => 'Psychiatry', 'dental' => 'Dental',
+    'skin' => 'Skin', 'dermatology' => 'Skin', 'radiology' => 'Radiology', 'anaesthesia' => 'Anaesthesia', 'anesthesia' => 'Anaesthesia',
+];
+
+function reflex_quiz(int $userId, string $t): ?array
+{
+    $key = 'quiz_' . $userId;
+    $db = med_db();
+    if (!$db) {
+        return null;
+    }
+    $pending = json_decode((string) kv_get($key), true);
+    $pending = is_array($pending) && ($pending['ts'] ?? 0) > time() - 1800 ? $pending : null;
+
+    // answering the open question
+    if ($pending && preg_match('/^(?:option |ans(?:wer)? |ans )?\(?([abcd])\)?(?: option| hai)?$/u', $t, $m)) {
+        $picked = ord($m[1]) - 97;
+        $right = (int) $pending['ans'];
+        kv_set($key, '');
+        $res = $picked === $right ? "Sahi jawab! \u{2705}" : 'Galat. Sahi jawab: ' . chr(65 + $right) . ') ' . $pending['opts'][$right] . " \u{274C}";
+        return ['reply' => $res . "\n\n" . ($pending['exp'] !== '' ? "Samjho: " . mb_substr($pending['exp'], 0, 700) . "\n\n" : '') . "Agla sawal chahiye? Bolo \"agla\".", 'actions' => []];
+    }
+
+    $next = preg_match('/^(agla|next|aur|ek aur|another)( sawal| question| mcq)?$/u', $t) && $pending !== false && kv_get('quiz_subject_' . $userId) !== null;
+    $ask = preg_match('/\b(mcq|quiz|test)\b.{0,25}\b(pucho|puchho|do|dikhao|lagao|ask|karao|chahiye|de do)\b|\b(pucho|puchho)\b.{0,20}\b(mcq|quiz|sawal)\b|^(\w+( \w+)?) ka (mcq|quiz)$|^(mcq|quiz)( pucho)?$/u', $t);
+    if (!$ask && !$next) {
+        return null;
+    }
+    $subject = null;
+    foreach (QUIZ_SUBJECTS as $k => $v) {
+        if (preg_match('/(^|[^\p{L}])' . preg_quote($k, '/') . '([^\p{L}]|$)/u', $t)) {
+            $subject = $v;
+            break;
+        }
+    }
+    if ($next && !$subject) {
+        $subject = kv_get('quiz_subject_' . $userId) ?: null;
+    }
+    $max = (int) $db->query('SELECT MAX(id) FROM mcq')->fetchColumn();
+    for ($i = 0; $i < 6; $i++) {
+        $st = $db->prepare('SELECT * FROM mcq WHERE id >= ?' . ($subject ? ' AND subject = ?' : '') . ' AND length(exp) > 60 AND length(q) > 25 LIMIT 1');
+        $st->execute($subject ? [random_int(1, $max), $subject] : [random_int(1, $max)]);
+        if ($r = $st->fetch()) {
+            break;
+        }
+    }
+    if (empty($r)) {
+        return null;
+    }
+    $opts = [$r['a'], $r['b'], $r['c'], $r['d']];
+    kv_set($key, json_encode(['ans' => (int) $r['ans'], 'opts' => $opts, 'exp' => (string) $r['exp'], 'ts' => time()], JSON_UNESCAPED_UNICODE));
+    kv_set('quiz_subject_' . $userId, $subject ?? '');
+    return ['reply' => "\u{1F4DD} " . $r['subject'] . ' / ' . $r['topic'] . "\n\n" . $r['q'] . "\n\nA) {$opts[0]}\nB) {$opts[1]}\nC) {$opts[2]}\nD) {$opts[3]}\n\nJawab me sirf A, B, C ya D likho.", 'actions' => []];
 }

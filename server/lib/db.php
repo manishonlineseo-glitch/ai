@@ -1,7 +1,7 @@
 <?php
 declare(strict_types=1);
 
-const SCHEMA_VERSION = 7;
+const SCHEMA_VERSION = 8;
 
 /**
  * A single-value read (COUNT(*), MAX(id)...) leaves the statement open until it is reset, and in SQLite an open read keeps
@@ -104,6 +104,15 @@ function db_fetch(PDOStatement $st): ?array
 function migrate(PDO $pdo): void
 {
     migrate_tables($pdo);
+    $pdo->exec('
+        CREATE TABLE IF NOT EXISTS library (
+            id INTEGER PRIMARY KEY,
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            name TEXT NOT NULL, kind TEXT NOT NULL, mime TEXT NOT NULL, size INTEGER NOT NULL,
+            status TEXT NOT NULL DEFAULT "queued", note TEXT, summary TEXT, created_at INTEGER NOT NULL
+        );
+        CREATE VIRTUAL TABLE IF NOT EXISTS lib_fts USING fts5(text, name UNINDEXED, doc_id UNINDEXED, user_id UNINDEXED, tokenize = "porter unicode61");
+    ');
     // Columns added after the first release (SQLite has no ADD COLUMN IF NOT EXISTS).
     $have = array_column($pdo->query('PRAGMA table_info(devices)')->fetchAll(), 'name');
     foreach (['cpu' => 'REAL', 'ram' => 'REAL', 'battery' => 'REAL', 'metrics_at' => 'INTEGER', 'login_id' => 'INTEGER', 'projects' => 'TEXT'] as $col => $type) {

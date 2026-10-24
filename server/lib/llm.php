@@ -130,3 +130,23 @@ function gemini_text(string $prompt, int $timeout = 40): string
     }
     throw new RuntimeException('Gemini: ' . mb_substr($last, 0, 260));
 }
+
+/** Gemini reads a photo or PDF (prescription, lab report, question paper, notes) and answers in text. */
+function gemini_vision(string $prompt, string $mime, string $b64): string
+{
+    if ((string) cfg('gemini_api_key') === '') {
+        throw new RuntimeException('gemini_api_key set nahi hai');
+    }
+    $last = '';
+    foreach (gemini_models() as $m) {
+        try {
+            return gemini_call((string) $m, [
+                'contents'         => [['role' => 'user', 'parts' => [['text' => $prompt], ['inline_data' => ['mime_type' => $mime, 'data' => $b64]]]]],
+                'generationConfig' => ['temperature' => 0.3],
+            ], 60);
+        } catch (RuntimeException $e) {
+            $last .= ($last ? ' | ' : '') . $e->getMessage();
+        }
+    }
+    throw new RuntimeException('Gemini: ' . mb_substr($last, 0, 260));
+}

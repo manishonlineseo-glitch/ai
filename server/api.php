@@ -13,6 +13,8 @@ require __DIR__ . '/lib/llm.php';
 require __DIR__ . '/lib/skills.php';
 require __DIR__ . '/lib/reflex.php';
 require __DIR__ . '/lib/knowledge.php';
+require __DIR__ . '/lib/medical.php';
+require __DIR__ . '/lib/library.php';
 require __DIR__ . '/lib/tasks.php';
 require __DIR__ . '/lib/brain.php';
 require __DIR__ . '/lib/claude.php';
@@ -549,6 +551,7 @@ switch ($route) {
     case 'chat':
         $me = require_client();
         $text = trim((string) ($in['text'] ?? ''));
+        $file = is_array($in['file'] ?? null) ? $in['file'] : null;
         if ($text === '' || mb_strlen($text) > 2000) {
             fail('Message 1-2000 akshar ka chahiye');
         }
@@ -559,11 +562,51 @@ switch ($route) {
         }
         $uid = (int) $me['user_id'];
         try {
+            if ($file) { // a photo or PDF to read (never stored on the server)
+                $mime = (string) ($file['mime'] ?? '');
+                $b64 = (string) ($file['data'] ?? '');
+                if (!in_array($mime, ['image/jpeg', 'image/png', 'image/webp', 'application/pdf'], true) || $b64 === '' || strlen($b64) > 6000000 || !preg_match('~^[A-Za-z0-9+/=]+$~', $b64)) {
+                    fail('File sahi nahi hai (photo ya PDF, 4 MB tak)');
+                }
+                json_out(chat_with_file($uid, $text, $mime, $b64));
+            }
             // Tries the configured brains in order (config.php 'brain' / 'brain_order'): Gemini, OpenAI, Claude API, or the laptop.
             json_out(chat_with_brains($uid, $text));
         } catch (RuntimeException $e) {
             fail($e->getMessage(), 502);
         }
+
+    // ---------- Meri Library: the owner's own files ----------
+    case 'library':
+        $me = require_client();
+        $st = $pdo->prepare('SELECT id, name, kind, size, status, note, summary, created_at FROM library WHERE user_id = ? ORDER BY id DESC LIMIT 200');
+        $st->execute([$me['user_id']]);
+        json_out(['files' => $st->fetchAll()]);
+
+    case 'library_upload': // multipart/form-data, field "file"
+        $me = require_client();
+        $f = $_FILES['file'] ?? null;
+        if (!$f || ($f['error'] ?? 1) !== UPLOAD_ERR_OK) {
+            fail('File upload nahi hui (size zyada ho sakti hai)');
+        }
+        try {
+            json_out(['id' => lib_add((int) $me['user_id'], $f)]);
+        } catch (RuntimeException $e) {
+            fail($e->getMessage(), 400);
+        }
+
+    case 'library_process': // reads and indexes one uploaded file (can take a minute for video)
+        $me = require_client();
+        try {
+            json_out(lib_process((int) ($in['id'] ?? 0), (int) $me['user_id']));
+        } catch (RuntimeException $e) {
+            fail($e->getMessage(), 422);
+        }
+
+    case 'library_delete':
+        $me = require_client();
+        lib_delete((int) ($in['id'] ?? 0), (int) $me['user_id']);
+        json_out(['ok' => true]);
 
     case 'chat_poll':
         $me = require_client();

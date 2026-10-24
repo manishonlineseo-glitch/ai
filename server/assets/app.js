@@ -9,6 +9,7 @@ const ICONS = {
   menu: 'M4 6h16M4 12h16M4 18h16',
   mic: 'M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3zM19 11a7 7 0 0 1-14 0M12 18v3',
   send: 'M12 19V5M5 12l7-7 7 7',
+  clip: 'M21 11.5l-8.5 8.5a5 5 0 0 1-7-7l9-9a3.5 3.5 0 0 1 5 5l-9 9a2 2 0 0 1-3-3l8-8',
   speaker: 'M11 5L6 9H3v6h3l5 4V5zM15.5 8.5a5 5 0 0 1 0 7M18.5 5.5a9 9 0 0 1 0 13',
 };
 const CHIPS = ['Mom ko call karo', 'YouTube par gaana lagao', 'Mere tasks dikhao', 'Home-PC ka CPU kaisa hai?'];
@@ -226,7 +227,7 @@ let pendingList = [];
 const announced = new Set();
 let noteHook = null;
 
-const TABS = [['chat', 'Chat'], ['tasks', 'Tasks'], ['report', 'Report'], ['notes', 'Notes'], ['devices', 'Devices'], ['skills', 'Seekha']];
+const TABS = [['chat', 'Chat'], ['tasks', 'Tasks'], ['report', 'Report'], ['notes', 'Notes'], ['devices', 'Devices'], ['skills', 'Seekha'], ['library', 'Library']];
 
 function note(text) {
   if (noteHook) noteHook(text);
@@ -278,7 +279,7 @@ function renderView() {
   document.getElementById('title').textContent = TABS.find(([id]) => id === tab)[1];
   const view = document.getElementById('view');
   view.replaceChildren();
-  ({ chat: viewChat, tasks: viewTasks, report: viewReport, notes: viewNotes, devices: viewDevices, skills: viewSkills })[tab](view);
+  ({ chat: viewChat, tasks: viewTasks, report: viewReport, notes: viewNotes, devices: viewDevices, skills: viewSkills, library: viewLibrary })[tab](view);
   tick();
 }
 
@@ -477,6 +478,10 @@ function viewChat(view) {
   const mic = h('button', { class: 'icon-btn', type: 'button', 'aria-label': 'Bol kar likho', title: SR ? 'Mic' : 'Is browser me mic nahi', disabled: !SR }, icon('mic'));
   const spk = h('button', { class: 'icon-btn' + (prefs.speak ? ' on' : ''), type: 'button', 'aria-label': 'Jawab bol kar sunao', title: 'Jawab bol kar sunao' }, icon('speaker'));
   let empty = null;
+  let attached = null; // {name, mime, data(base64)}: a photo or PDF to read with the next message
+  const fileInput = h('input', { type: 'file', accept: 'image/*,application/pdf', style: 'display:none' });
+  const clipBtn = h('button', { class: 'icon-btn', type: 'button', 'aria-label': 'Photo ya PDF jodo', title: 'Photo / PDF padhwao (dawai ki parchi, report, sawal)' }, icon('clip'));
+  const fileChip = h('div', { class: 'hint', style: 'display:none' });
 
   const add = (cls, text) => {
     if (empty) { empty.remove(); empty = null; }
@@ -490,14 +495,18 @@ function viewChat(view) {
 
   async function send(text, viaVoice) {
     text = text.trim();
-    if (!text) return;
+    const file = attached;
+    if (!text && !file) return;
+    if (!text) text = 'Is ko padh kar aasan bhasha me samjhao';
     input.value = '';
+    attached = null;
+    fileChip.style.display = 'none';
     fit();
-    add('user', text);
+    add('user', (file ? '\u{1F4CE} ' + file.name + '\n' : '') + text);
     const wait = add('assistant typing', null);
     wait.append(h('span'), h('span'), h('span'));
     try {
-      let res = await api('chat', { text });
+      let res = await api('chat', file ? { text, file: { mime: file.mime, data: file.data } } : { text });
       if (res.job) { // the laptop is thinking (your own subscription, no API); poll until it answers
         const t0 = Date.now();
         wait.querySelector('span:last-child').textContent = '';
@@ -530,7 +539,7 @@ function viewChat(view) {
   function fit() {
     input.style.height = 'auto';
     input.style.height = Math.min(input.scrollHeight, 160) + 'px';
-    sendBtn.disabled = input.value.trim() === '';
+    sendBtn.disabled = input.value.trim() === '' && !attached;
   }
   input.addEventListener('input', fit);
   input.addEventListener('keydown', (e) => {
@@ -568,9 +577,51 @@ function viewChat(view) {
     if (!prefs.speak && 'speechSynthesis' in window) speechSynthesis.cancel();
   });
 
+  // A photo is shrunk in the browser (max 1600 px, JPEG) so it uploads fast; a PDF goes as it is (max 4 MB).
+  function readFile(f) {
+    return new Promise((resolve, reject) => {
+      const done = (mime, dataUrl) => resolve({ name: f.name, mime, data: dataUrl.split(',')[1] });
+      if (f.type === 'application/pdf') {
+        if (f.size > 4 * 1024 * 1024) return reject(new Error('PDF 4 MB se chhota chahiye'));
+        const r = new FileReader();
+        r.onload = () => done('application/pdf', r.result);
+        r.onerror = () => reject(new Error('File padh nahi paya'));
+        return r.readAsDataURL(f);
+      }
+      if (!f.type.startsWith('image/')) return reject(new Error('Sirf photo ya PDF'));
+      const img = new Image();
+      img.onload = () => {
+        const k = Math.min(1, 1600 / Math.max(img.width, img.height));
+        const c = document.createElement('canvas');
+        c.width = Math.round(img.width * k);
+        c.height = Math.round(img.height * k);
+        c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+        done('image/jpeg', c.toDataURL('image/jpeg', 0.85));
+        URL.revokeObjectURL(img.src);
+      };
+      img.onerror = () => reject(new Error('Photo khul nahi payi'));
+      img.src = URL.createObjectURL(f);
+    });
+  }
+  clipBtn.addEventListener('click', () => fileInput.click());
+  fileInput.addEventListener('change', async () => {
+    const f = fileInput.files[0];
+    fileInput.value = '';
+    if (!f) return;
+    try {
+      attached = await readFile(f);
+      fileChip.textContent = '\u{1F4CE} ' + attached.name + ' - ab kuch likho (ya seedha bhejo)';
+      fileChip.style.display = '';
+      fit();
+    } catch (x) {
+      add('err', x.message);
+    }
+  });
+
   const form = h('form', { class: 'composer', onsubmit: (e) => { e.preventDefault(); send(input.value); } },
+    fileChip,
     input,
-    h('div', { class: 'row' }, spk, h('div', { class: 'row' }, mic, sendBtn)));
+    h('div', { class: 'row' }, h('div', { class: 'row' }, spk, clipBtn, fileInput), h('div', { class: 'row' }, mic, sendBtn)));
 
   view.append(
     scroll,
@@ -1004,3 +1055,57 @@ async function boot() {
   }
 }
 boot();
+
+// ---------- Meri Library: your own PDFs, photos, videos, databases that Jarvis reads and remembers ----------
+function viewLibrary(view) {
+  const err = h('div', { class: 'error', role: 'alert' });
+  const box = h('div', { class: 'card' });
+  const list = h('div', { class: 'card' });
+  const input = h('input', { type: 'file', multiple: true, style: 'display:none',
+    accept: '.pdf,.jpg,.jpeg,.png,.webp,.mp4,.mov,.mkv,.webm,.avi,.3gp,.mp3,.wav,.m4a,.aac,.ogg,.txt,.md,.csv,.json,.sql,.docx,.sqlite,.sqlite3,.db,.html,.xml,.py,.php,.js,.log' });
+  const status = h('div', { class: 'muted' });
+  const KIND = { pdf: 'PDF', image: 'Photo', video: 'Video', audio: 'Audio', text: 'Text', docx: 'Word', sqlite: 'Database' };
+  const STATE = { queued: 'line me', reading: 'padh raha hoon...', ready: 'yaad ho gaya', failed: 'fail' };
+
+  async function upload(file) {
+    status.textContent = file.name + ': bhej raha hoon...';
+    const fd = new FormData();
+    fd.append('file', file);
+    const r = await fetch('api.php?r=library_upload', { method: 'POST', headers: { 'X-Requested-With': 'jarvis' }, body: fd });
+    const j = await r.json().catch(() => ({ error: 'Server ne galat jawab diya' }));
+    if (!r.ok) throw new Error(j.error || 'Upload fail');
+    status.textContent = file.name + ': Jarvis padh raha hai (video/PDF me 1-3 minute lag sakte hain)...';
+    await load();
+    await api('library_process', { id: j.id });
+  }
+
+  async function load() {
+    const { files } = await api('library');
+    list.replaceChildren(
+      h('h3', null, 'Aapki files (' + files.length + ')'),
+      files.length ? null : h('p', { class: 'muted' }, 'Abhi kuch nahi. Upar se PDF, photo, video ya database jodo.'),
+      ...files.map((f) => h('div', { class: 'row', style: 'justify-content:space-between;align-items:flex-start;gap:8px;margin:8px 0' },
+        h('div', null,
+          h('div', null, h('b', null, f.name), ' ', h('span', { class: 'muted' }, KIND[f.kind] + ' - ' + (f.size / 1048576).toFixed(1) + ' MB')),
+          h('div', { class: 'muted' }, (STATE[f.status] || f.status) + (f.note ? ' - ' + f.note : '')),
+          f.status === 'failed' ? h('button', { class: 'small ghost', onclick: async () => { try { await api('library_process', { id: f.id }); } catch (x) { err.textContent = x.message; } load(); } }, 'Dobara try') : null),
+        h('button', { class: 'small ghost', onclick: async () => { if (confirm(f.name + ' hata dein?')) { await api('library_delete', { id: f.id }); load(); } } }, 'Hatao'))));
+  }
+
+  input.addEventListener('change', async () => {
+    err.textContent = '';
+    for (const f of [...input.files]) {
+      try { await upload(f); } catch (x) { err.textContent = f.name + ': ' + x.message; }
+    }
+    input.value = '';
+    status.textContent = '';
+    load();
+  });
+
+  box.append(
+    h('h3', null, 'Meri Library'),
+    h('p', { class: 'muted' }, 'Apni modules, notes, PDF, photo, video, audio, Word, CSV ya database jodo. Jarvis ek baar padh kar yaad rakhta hai, phir chat me aap kuch bhi poochho to pehle isi me se jawab dhundhta hai. Files sirf aapke server par rehti hain.'),
+    h('button', { onclick: () => input.click() }, 'File jodo'), input, status);
+  view.append(box, err, list);
+  load().catch((x) => { err.textContent = x.message; });
+}

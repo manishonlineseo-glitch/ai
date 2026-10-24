@@ -170,3 +170,11 @@ This is retrieval, not model training: Jarvis answers better because the right n
 
 `knowledge/mcp_server.py` is a dependency-free MCP server (stdio, read-only) with tools `list_departments`, `search_playbooks`, `get_playbook`, `reply_style`. Registered on the laptop for Codex (`codex mcp add`) and Claude Code (`claude mcp add --scope user`), so the laptop brain uses the same library.
 Rebuild/refresh the library by re-cloning the source repos and running the curation script (license check + prompt-injection scan + de-duplication).
+
+## Medical + exam library, photo/PDF reading, "Meri Library"
+
+- `data/med.sqlite` (live: `~/jarvis_data/med.sqlite`, read-only, built by a script from public sources, not in git): MedlinePlus health topics + medicine pages (US National Library of Medicine, public domain), MedMCQA (~187k Indian medical-entrance MCQs with explanations, Apache-2.0), OpenStax textbooks - nursing, anatomy, microbiology, biology, chemistry, physics, maths, history, economics (CC BY-NC-SA 4.0, personal non-commercial use). SQLite FTS5 search, ~10-30 ms. `lib/medical.php` maps Hindi/Hinglish words (bukhar, khansi...) to English terms, adds a MEDICAL REFERENCE block and safety rules to the prompt (education, not diagnosis; red flags -> doctor / 108).
+- Student mode: say "mai GNM padh raha hu" / "MBBS" / "NEET" -> the level is remembered; answers are explained in easy Hinglish with exam points. "anatomy ka mcq pucho" gives a real past-paper question (instant, no AI); answer A/B/C/D; "agla" for the next one (`reflex_quiz`).
+- Photo/PDF in chat: paperclip button -> `chat_with_file` (Gemini reads prescriptions, reports, question papers, notes; nothing is stored).
+- `lib/library.php` + Library tab: the owner's own files (PDF, photos, scans, video, audio, text/CSV/JSON, Word .docx, SQLite databases). Stored in `~/jarvis_data/library/` (outside the web root), read once (text directly; PDF/photo/video/audio by Gemini via inline data or the Files API), chunked into the `lib_fts` table; chat searches them and answers from them first (`library_context`).
+- Not included: no open dataset exists for Bihar/India government-exam previous-year papers (the copyright belongs to the exam bodies / publishers); upload papers you own into Library and Jarvis will answer from them. Ayurvedic texts found online had no licence, so none were added.
