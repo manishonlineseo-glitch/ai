@@ -13,6 +13,7 @@ import android.os.Environment
 import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
+import android.speech.tts.TextToSpeech
 import android.view.Gravity
 import android.view.ViewGroup
 import android.webkit.CookieManager
@@ -25,12 +26,15 @@ import android.widget.FrameLayout
 import android.widget.TextView
 import android.widget.Toast
 import org.json.JSONObject
+import java.util.Locale
 
 /** The Jarvis web app in a full-screen WebView, plus native voice input and a button to the Settings screen. */
 class MainActivity : Activity() {
     private lateinit var web: WebView
     private var recognizer: SpeechRecognizer? = null
     private var pendingLang: String? = null
+    private var tts: TextToSpeech? = null
+    private var ttsReady = false
 
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -109,6 +113,7 @@ class MainActivity : Activity() {
 
     override fun onDestroy() {
         recognizer?.destroy()
+        tts?.shutdown()
         super.onDestroy()
     }
 
@@ -128,6 +133,32 @@ class MainActivity : Activity() {
         fun stop() {
             runOnUiThread { recognizer?.stopListening() }
         }
+
+        /** Speak a reply out loud (the web page only asks for this when the question was spoken). */
+        @JavascriptInterface
+        fun speak(text: String, lang: String) {
+            runOnUiThread { speakOut(text, lang) }
+        }
+
+        @JavascriptInterface
+        fun stopSpeaking() {
+            runOnUiThread { tts?.stop() }
+        }
+    }
+
+    private fun speakOut(text: String, lang: String) {
+        val engine = tts
+        if (engine == null) {
+            tts = TextToSpeech(this) { status ->
+                ttsReady = status == TextToSpeech.SUCCESS
+                if (ttsReady) speakOut(text, lang)
+            }
+            return
+        }
+        if (!ttsReady) return
+        val loc = Locale.forLanguageTag(lang)
+        if (engine.isLanguageAvailable(loc) >= TextToSpeech.LANG_AVAILABLE) engine.language = loc
+        engine.speak(text, TextToSpeech.QUEUE_FLUSH, null, "jarvis")
     }
 
     private fun startListening(lang: String) {

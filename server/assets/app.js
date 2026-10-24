@@ -81,8 +81,13 @@ let prefs = { speak: false, lang: 'hi-IN' };
 try { prefs = { ...prefs, ...JSON.parse(localStorage.getItem('jv_prefs') || '{}') }; } catch (_) { /* private mode */ }
 function savePrefs() { try { localStorage.setItem('jv_prefs', JSON.stringify(prefs)); } catch (_) { /* ignore */ } }
 
-function speak(text) {
-  if (!prefs.speak || !('speechSynthesis' in window)) return;
+/** Speaks `text` when the speaker toggle is on, or always when `force` (the question was spoken). The app uses the phone's own voice. */
+function speak(text, force) {
+  if (!force && !prefs.speak) return;
+  text = String(text).split('\n\n•')[0].replace(/https?:\/\/\S+/g, '').trim();
+  if (!text) return;
+  if (window.JarvisNative && JarvisNative.speak) { JarvisNative.speak(text, prefs.lang); return; }
+  if (!('speechSynthesis' in window)) return;
   const u = new SpeechSynthesisUtterance(text);
   u.lang = prefs.lang;
   speechSynthesis.cancel();
@@ -483,7 +488,7 @@ function viewChat(view) {
   noteHook = (t) => add('note', t);
   while (missedNotes.length) add('note', missedNotes.shift()); // results that arrived while you were on another tab
 
-  async function send(text) {
+  async function send(text, viaVoice) {
     text = text.trim();
     if (!text) return;
     input.value = '';
@@ -513,7 +518,7 @@ function viewChat(view) {
         scroll.append(h('a', { class: 'btn', href: a.url, rel: 'noopener noreferrer' }, a.label));
       }
       scroll.scrollTop = scroll.scrollHeight;
-      speak(reply);
+      speak(reply, !!viaVoice); // spoken question -> spoken answer; typed question -> text only
       kickScheduler();
       tick();
     } catch (x) {
@@ -536,11 +541,13 @@ function viewChat(view) {
   });
 
   function talk() {
+    if (window.JarvisNative && JarvisNative.stopSpeaking) JarvisNative.stopSpeaking();
+    if ('speechSynthesis' in window) speechSynthesis.cancel();
     if (activeRec) { activeRec.stop(); return; }
     mic.classList.add('live');
     hud.el.classList.add('listening');
     listen(async (t) => {
-      if (!(await tryVoiceDecision(t))) send(t); // "haan"/"nahi" answers a waiting approval, anything else is chat
+      if (!(await tryVoiceDecision(t))) send(t, true); // "haan"/"nahi" answers a waiting approval, anything else is chat
     }, () => { mic.classList.remove('live'); hud.el.classList.remove('listening'); });
   }
   mic.addEventListener('click', talk);
