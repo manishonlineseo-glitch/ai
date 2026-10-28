@@ -227,7 +227,7 @@ let pendingList = [];
 const announced = new Set();
 let noteHook = null;
 
-const TABS = [['chat', 'Chat'], ['tasks', 'Tasks'], ['report', 'Report'], ['notes', 'Notes'], ['devices', 'Devices'], ['skills', 'Seekha'], ['library', 'Library'], ['leads', 'Leads']];
+const TABS = [['chat', 'Chat'], ['tasks', 'Tasks'], ['report', 'Report'], ['notes', 'Notes'], ['devices', 'Devices'], ['skills', 'Seekha'], ['library', 'Library'], ['leads', 'Leads'], ['content', 'Content']];
 
 function note(text) {
   if (noteHook) noteHook(text);
@@ -271,6 +271,7 @@ function closeSide() {
 }
 
 function renderView() {
+  clearInterval(contentTimer);
   noteHook = null;
   hud = null;
   refreshTasks = null;
@@ -279,7 +280,7 @@ function renderView() {
   document.getElementById('title').textContent = TABS.find(([id]) => id === tab)[1];
   const view = document.getElementById('view');
   view.replaceChildren();
-  ({ chat: viewChat, tasks: viewTasks, report: viewReport, notes: viewNotes, devices: viewDevices, skills: viewSkills, library: viewLibrary, leads: viewLeads })[tab](view);
+  ({ chat: viewChat, tasks: viewTasks, report: viewReport, notes: viewNotes, devices: viewDevices, skills: viewSkills, library: viewLibrary, leads: viewLeads, content: viewContent })[tab](view);
   tick();
 }
 
@@ -1003,6 +1004,170 @@ function appsCard() {
     h('p', { class: 'muted' }, '1. Upar "Device ID aur Password" me + Naya device ID dabao: naam likho, device type chuno (Laptop / Android...), username aur password rakho.'),
     h('p', { class: 'muted' }, '2. App download karke install karo, kholo aur wahi username/password daalo. Bas, ho gaya: koi code nahi.'),
     h('p', { class: 'muted' }, '3. Password badalna ho to Device ID me Edit dabake naya daalo. App apne aap naye password se login ho jati hai (agar app me bhi badla ho).'));
+}
+
+// ---------- content: briefs, history, results, own-text check, rules editor ----------
+let contentTimer = null;
+
+function copyText(t) {
+  try { navigator.clipboard.writeText(t); } catch (_) { /* clipboard blocked: the text can still be selected by hand */ }
+}
+
+function reportBox(r) {
+  return h('div', null,
+    h('p', { class: r.pass ? 'tag accent' : 'error', role: 'status' },
+      r.pass ? 'Sab zaroori checks PASS (' + r.words + ' words)' : r.failed.length + ' zaroori check fail hain (' + r.words + ' words)'),
+    r.checks.map((c) => h('div', { class: 'item' },
+      h('span', { class: 'tag' + (c.ok ? ' accent' : '') }, c.ok ? 'OK' : (c.hard ? 'FAIL' : 'tip')),
+      h('div', { class: 'grow' }, c.label,
+        h('div', { class: 'muted' }, c.value + (c.ok ? '' : ' (chahiye: ' + c.need + ')'))))),
+    h('p', { class: 'muted' }, 'Ye aapko khud dekhna hai (program nahi kar sakta):'),
+    r.manual.map((m, i) => h('div', { class: 'row' },
+      h('input', { type: 'checkbox', class: 'check', id: 'man' + i }), h('label', { for: 'man' + i }, m))));
+}
+
+function fieldWithCopy(label, value, extra) {
+  return h('div', { style: 'margin-bottom:10px' },
+    h('label', null, label, extra ? h('span', { class: 'muted' }, ' ' + extra) : null),
+    h('div', { class: 'row' }, h('input', { value, readonly: true, class: 'grow' }),
+      h('button', { type: 'button', class: 'ghost small', onclick: () => copyText(value) }, 'Copy')));
+}
+
+function viewContent(view) {
+  clearInterval(contentTimer);
+  let selected = 0;
+  let lastListSig = '';
+  const msg = h('div', { class: 'error', role: 'alert' });
+  const listBox = h('div', { class: 'card' });
+  const detailBox = h('div');
+
+  // --- 1. new content
+  const f = {
+    topic: h('textarea', { rows: 3, maxlength: 1200, placeholder: 'Kis bare me likhna hai? (jaise: small shops par payment fail kyu hota hai aur kya karein)', 'aria-label': 'Topic' }),
+    keyword: h('input', { maxlength: 80, placeholder: 'jaise: payment failed', 'aria-label': 'Focus keyword' }),
+    brand: h('input', { maxlength: 80, value: 'Wisi Pay', 'aria-label': 'Brand' }),
+    language: h('select', { 'aria-label': 'Language' }, ['English', 'Hinglish', 'Hindi'].map((l) => h('option', { value: l }, l))),
+    words: h('input', { type: 'number', min: 300, max: 2500, value: 900, 'aria-label': 'Words' }),
+    audience: h('input', { maxlength: 200, placeholder: 'jaise: small shop owners in India', 'aria-label': 'Audience' }),
+    pages: h('textarea', { rows: 3, maxlength: 800, placeholder: 'Internal pages jahan link karna hai, ek line me ek: /blog/online-payments', 'aria-label': 'Internal pages' }),
+    notes: h('input', { maxlength: 800, placeholder: 'Koi extra baat (optional)', 'aria-label': 'Notes' }),
+  };
+  const go = h('button', { type: 'submit' }, 'Likhwao');
+  const newForm = h('form', { onsubmit: async (e) => {
+    e.preventDefault();
+    msg.textContent = '';
+    go.disabled = true;
+    try {
+      const r = await api('content_new', { topic: f.topic.value, focus_keyword: f.keyword.value, brand: f.brand.value, language: f.language.value,
+        words: Number(f.words.value), audience: f.audience.value, pages: f.pages.value, notes: f.notes.value });
+      selected = r.id;
+      kickScheduler();
+      await loadList();
+      await loadDetail();
+    } catch (x) { msg.textContent = x.message; }
+    go.disabled = false;
+  } },
+    h('label', null, 'Topic'), f.topic,
+    h('div', { class: 'row wrap' }, h('div', { class: 'grow' }, h('label', null, 'Focus keyword'), f.keyword), h('div', { class: 'grow' }, h('label', null, 'Brand'), f.brand)),
+    h('div', { class: 'row wrap' }, h('div', { class: 'grow' }, h('label', null, 'Language'), f.language), h('div', { class: 'grow' }, h('label', null, 'Words'), f.words)),
+    h('label', null, 'Audience'), f.audience,
+    h('label', null, 'Internal pages'), f.pages,
+    h('label', null, 'Extra notes'), f.notes,
+    msg, go,
+    h('p', { class: 'muted' }, 'Jarvis aapke rules ke hisaab se likhta hai, program se check karta hai aur jo fail ho use sudharta hai (1-2 minute).'));
+
+  // --- history + detail
+  async function loadList() {
+    const { items } = await api('content_list');
+    const sig = JSON.stringify(items.map((t) => [t.id, t.status, t.pass, t.rounds, t.updated_at]));
+    if (sig === lastListSig) return; // nothing changed: keep the buttons the owner is about to press
+    lastListSig = sig;
+    listBox.replaceChildren(...(items.length ? items.map((t) => {
+      const doing = t.status === 'doing';
+      const label = doing ? 'likh raha hoon...' : t.pass === true ? 'tayyar: sab checks pass' : t.pass === false ? 'tayyar: kuch checks fail' : t.status === 'todo' ? 'likh nahi paya (Kholo me wajah dekho)' : t.status;
+      return h('div', { class: 'item' },
+        h('div', { class: 'grow' }, t.title, h('div', { class: 'muted' }, label + (t.words ? ' · ' + t.words + ' words' : '') + (t.rounds ? ' · ' + t.rounds + ' round' : '') + ' · ' + timeAgo(t.updated_at))),
+        h('button', { class: 'ghost small', onclick: () => { selected = t.id; loadDetail(); } }, 'Kholo'));
+    }) : [h('p', { class: 'muted' }, 'Abhi koi content nahi hai. Upar se naya likhwao.')]));
+  }
+
+  async function loadDetail() {
+    if (!selected) { detailBox.replaceChildren(); return; }
+    const { task, result, last_log } = await api('content_get&id=' + selected);
+    if (!result) {
+      detailBox.replaceChildren(h('div', { class: 'card' }, h('h2', null, task.title),
+        h('p', { class: 'muted' }, task.status === 'doing' ? 'Jarvis likh raha hai... (1-2 minute, ye page apne aap badlega)' : (last_log || 'Abhi koi result nahi hai.'))));
+      return;
+    }
+    const d = result.doc;
+    const body = h('textarea', { rows: 20, 'aria-label': 'Article' });
+    body.value = d.body;
+    const out = h('div');
+    const recheck = async () => {
+      try { out.replaceChildren(reportBox(await api('content_check', { focus_keyword: d.focus_keyword, seo_title: d.seo_title, meta_description: d.meta_description, slug: d.slug, body: body.value }))); }
+      catch (x) { out.replaceChildren(h('p', { class: 'error' }, x.message)); }
+    };
+    out.replaceChildren(reportBox(result));
+    detailBox.replaceChildren(h('div', { class: 'card' },
+      h('h2', null, task.title),
+      fieldWithCopy('Focus keyword', d.focus_keyword),
+      fieldWithCopy('SEO title', d.seo_title, '(' + d.seo_title.length + ' akshar, chahiye 50-60)'),
+      fieldWithCopy('Meta description', d.meta_description, '(' + d.meta_description.length + ' akshar, chahiye 120-155)'),
+      fieldWithCopy('Slug', d.slug),
+      h('label', null, 'Article (aap yahin badal sakte ho, phir "Dobara check" dabao)'), body,
+      h('div', { class: 'row wrap', style: 'margin-top:8px' },
+        h('button', { type: 'button', onclick: () => copyText(body.value) }, 'Article copy karo'),
+        h('button', { type: 'button', class: 'ghost', onclick: recheck }, 'Dobara check'),
+        h('a', { class: 'btn ghost', href: 'https://www.zerogpt.com/', target: '_blank', rel: 'noopener noreferrer', onclick: () => copyText(body.value) }, 'ZeroGPT kholo (article copy ho jayega)')),
+      h('h2', null, 'Check report'), out));
+  }
+
+  // --- 2. own text
+  const own = {
+    keyword: h('input', { maxlength: 80, placeholder: 'Focus keyword', 'aria-label': 'Focus keyword' }),
+    title: h('input', { maxlength: 200, placeholder: 'SEO title', 'aria-label': 'SEO title' }),
+    meta: h('input', { maxlength: 400, placeholder: 'Meta description', 'aria-label': 'Meta description' }),
+    slug: h('input', { maxlength: 120, placeholder: 'URL slug (jaise payment-failed-fixes)', 'aria-label': 'Slug' }),
+    body: h('textarea', { rows: 10, placeholder: 'Apna article yahan paste karo (Markdown: ## heading, [link](/page), ![alt](/img.jpg))', 'aria-label': 'Your text' }),
+  };
+  const ownOut = h('div');
+  const ownForm = h('form', { onsubmit: async (e) => {
+    e.preventDefault();
+    try { ownOut.replaceChildren(reportBox(await api('content_check', { focus_keyword: own.keyword.value, seo_title: own.title.value, meta_description: own.meta.value, slug: own.slug.value, body: own.body.value }))); }
+    catch (x) { ownOut.replaceChildren(h('p', { class: 'error' }, x.message)); }
+  } }, own.keyword, own.title, own.meta, own.slug, own.body, h('button', { type: 'submit' }, 'Check karo (AI ke bina)'));
+
+  // --- 3. rules editor
+  const rulesBox = h('textarea', { rows: 18, 'aria-label': 'Content rules' });
+  const rulesMsg = h('div', { class: 'muted' });
+  const rulesNote = h('p', { class: 'muted' });
+  async function loadRules() {
+    const r = await api('content_rules');
+    rulesBox.value = r.rules;
+    rulesNote.textContent = r.edited ? 'Ye aapki badli hui copy hai (server par). "Default par wapas" dabane se code wali file wapas aa jayegi.' : 'Ye code ke saath aayi default file hai. Save karoge to aapki copy ban jayegi jo deploy se nahi badlegi.';
+  }
+  const rulesCard = h('div', { class: 'card' },
+    h('p', { class: 'muted' }, 'Jarvis har content isi file ke hisaab se likhta hai. Yahan badlao to agle content se lagu. Program jo numbers check karta hai (jaise 50-60 characters, 30% transition words) code me hain; unhe badalna ho to mujhe batao.'),
+    rulesBox, rulesNote,
+    h('div', { class: 'row wrap' },
+      h('button', { type: 'button', onclick: async () => { try { const r = await api('content_rules_save', { rules: rulesBox.value }); rulesBox.value = r.rules; rulesMsg.textContent = 'Save ho gaya.'; loadRules(); } catch (x) { rulesMsg.textContent = x.message; } } }, 'Save'),
+      h('button', { type: 'button', class: 'ghost', onclick: async () => { if (confirm('Default rules wapas laye?')) { try { await api('content_rules_save', { reset: true }); rulesMsg.textContent = 'Default wapas aa gaya.'; loadRules(); } catch (x) { rulesMsg.textContent = x.message; } } } }, 'Default par wapas')),
+    rulesMsg);
+
+  page(view,
+    h('h2', null, 'Naya content likhwao'), h('div', { class: 'card' }, newForm),
+    h('h2', null, 'Mere content'), listBox, detailBox,
+    h('h2', null, 'Apna text check karo'), h('div', { class: 'card' }, ownForm, ownOut),
+    h('h2', null, 'Content rules (aapki file)'), rulesCard);
+  loadList().catch(() => {});
+  loadRules().catch(() => {});
+  contentTimer = setInterval(async () => {
+    if (document.hidden) return;
+    try {
+      await loadList();
+      if (selected && !detailBox.querySelector('textarea')) await loadDetail(); // a draft that was still being written
+    } catch (_) { /* next tick */ }
+  }, 6000);
 }
 
 // ---------- boot ----------

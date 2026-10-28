@@ -194,6 +194,9 @@ function task_execute(array $task): void
             $w = content_write($uid, $topic);
             $d = $w['doc'];
             $r = $w['result'];
+            kv_set('content_result_' . $id, json_encode(['doc' => ['focus_keyword' => $d['focus_keyword'], 'seo_title' => $d['seo_title'], 'meta_description' => $d['meta_description'],
+                'slug' => $d['slug'], 'body' => $d['body']], 'pass' => $r['pass'], 'rounds' => $w['rounds'], 'words' => $r['words'], 'checks' => $r['checks'],
+                'failed' => $r['failed'], 'manual' => $r['manual'], 'trace' => $w['trace'], 'at' => time()], JSON_UNESCAPED_UNICODE));
             $head = ($r['pass'] ? "Content tayyar: Yoast/readability ke sab zaroori checks PASS (" . $w['rounds'] . " round). " : "Content tayyar, par ye checks abhi bhi fail hain (" . $w['rounds'] . " round ke baad):
 - " . implode("
 - ", $r['failed']) . "

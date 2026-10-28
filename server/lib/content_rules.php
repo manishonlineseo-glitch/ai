@@ -33,14 +33,40 @@ const CONTENT_AI_CLICHES = [
     'paradigm', 'synergy', 'holistic', 'streamline', 'foster', 'pivotal', 'crucial', 'vital role', 'ever-changing', 'fast-paced world',
 ];
 
+/** Where the owner's edits from the Content page are kept: outside the web root, never touched by a deploy. */
+function content_rules_override_path(): string
+{
+    $own = (string) cfg('content_rules_file');
+    return $own !== '' ? $own : dirname((string) cfg('db_path')) . '/content_rules.md';
+}
+
 function content_rules_text(): string
 {
-    $file = __DIR__ . '/../content/rules.md';
-    $own = (string) cfg('content_rules_file'); // optional override outside the web root
-    if ($own !== '' && is_file($own)) {
-        $file = $own;
-    }
+    $override = content_rules_override_path();
+    $file = is_file($override) ? $override : __DIR__ . '/../content/rules.md'; // edited copy first, then the one shipped with the code
     return is_file($file) ? (string) file_get_contents($file) : '';
+}
+
+/** The brief the writer gets, built from the Content page form (every field is data, trimmed and length-limited). */
+function content_build_brief(array $in): string
+{
+    $clean = fn(string $k, int $max) => trim(mb_substr(preg_replace('/[\x00-\x08\x0B\x0C\x0E-\x1F]/u', '', (string) ($in[$k] ?? '')) ?? '', 0, $max));
+    $topic = $clean('topic', 1200);
+    if (mb_strlen($topic) < 5) {
+        throw new InvalidArgumentException('Topic kam se kam 5 akshar ka likho');
+    }
+    $lang = in_array($in['language'] ?? '', ['English', 'Hinglish', 'Hindi'], true) ? $in['language'] : 'English';
+    $words = min(max((int) ($in['words'] ?? 900), 300), 2500);
+    $pages = array_slice(array_filter(array_map('trim', preg_split('/\R+/u', $clean('pages', 800)) ?: [])), 0, 8);
+    $lines = ['Brand: ' . ($clean('brand', 80) ?: 'Wisi Pay'), 'Language: ' . $lang, 'Focus keyword: ' . ($clean('focus_keyword', 80) ?: '(choose a good 2-4 word focus keyphrase from the topic)'),
+        'Topic: ' . $topic, 'Audience: ' . ($clean('audience', 200) ?: 'the brand\'s customers'), 'Target length: about ' . $words . ' words'];
+    if ($pages) {
+        $lines[] = 'INTERNAL PAGES to link: ' . implode(', ', $pages);
+    }
+    if ($notes = $clean('notes', 800)) {
+        $lines[] = 'Extra notes: ' . $notes;
+    }
+    return implode("\n", $lines);
 }
 
 // ---------------------------------------------------------------------------------------------- text helpers

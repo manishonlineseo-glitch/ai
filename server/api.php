@@ -758,6 +758,84 @@ switch ($route) {
         $st->execute([$task['id']]);
         json_out(['task' => $task, 'log' => $st->fetchAll()]);
 
+    // ---------- Content page: brief -> content task, history, result, own-text check, rules editor ----------
+    case 'content_new':
+        $me = require_client();
+        $uid = (int) $me['user_id'];
+        if (agents_paused($uid)) {
+            fail('Jarvis PAUSE hai: pehle resume karo', 409);
+        }
+        $busy = $pdo->prepare('SELECT COUNT(*) FROM tasks WHERE user_id = ? AND category = "content" AND status = "doing"');
+        $busy->execute([$uid]);
+        if ((int) $busy->fetchColumn() >= 3) {
+            fail('Pehle se 3 content likhe ja rahe hain, thoda ruko', 429);
+        }
+        try {
+            $brief = content_build_brief($in);
+            $title = 'Content: ' . mb_substr(trim((string) ($in['focus_keyword'] ?? '')) ?: trim((string) ($in['topic'] ?? '')), 0, 70);
+            $id = task_add($uid, $title, 'content', $brief, 'jarvis');
+        } catch (InvalidArgumentException $e) {
+            fail($e->getMessage());
+        }
+        json_out(['id' => $id]);
+
+    case 'content_list':
+        $me = require_client();
+        $st = $pdo->prepare('SELECT id, title, status, run_state, updated_at FROM tasks WHERE user_id = ? AND category = "content" ORDER BY id DESC LIMIT 40');
+        $st->execute([$me['user_id']]);
+        $rows = [];
+        foreach ($st->fetchAll() as $t) {
+            $res = json_decode((string) kv_get('content_result_' . $t['id']), true);
+            $rows[] = $t + ['pass' => is_array($res) ? (bool) $res['pass'] : null, 'rounds' => $res['rounds'] ?? null, 'words' => $res['words'] ?? null];
+        }
+        json_out(['items' => $rows]);
+
+    case 'content_get':
+        $me = require_client();
+        $task = task_get((int) $me['user_id'], (int) ($_GET['id'] ?? 0));
+        if (!$task || $task['category'] !== 'content') {
+            fail('Nahi mila', 404);
+        }
+        $res = json_decode((string) kv_get('content_result_' . $task['id']), true);
+        $log = $pdo->prepare('SELECT text FROM task_log WHERE task_id = ? ORDER BY id DESC LIMIT 1');
+        $log->execute([$task['id']]);
+        json_out(['task' => ['id' => $task['id'], 'title' => $task['title'], 'status' => $task['status'], 'run_state' => $task['run_state'], 'brief' => $task['details']],
+            'result' => is_array($res) ? $res : null, 'last_log' => $res ? '' : mb_substr((string) $log->fetchColumn(), 0, 300)]);
+
+    case 'content_check': // the owner's own text (or an edited draft) against the same rules, no AI
+        $me = require_client();
+        $body = (string) ($in['body'] ?? '');
+        if (mb_strlen($body) < 20 || mb_strlen($body) > 60000) {
+            fail('Text 20 se 60000 akshar ka chahiye');
+        }
+        $hosts = array_values(array_filter(array_map('trim', preg_split('/[\s,]+/', (string) cfg('content_internal_hosts')) ?: [])));
+        $r = content_check(['focus_keyword' => mb_substr((string) ($in['focus_keyword'] ?? ''), 0, 80), 'seo_title' => mb_substr((string) ($in['seo_title'] ?? ''), 0, 200),
+            'meta_description' => mb_substr((string) ($in['meta_description'] ?? ''), 0, 400), 'slug' => mb_substr((string) ($in['slug'] ?? ''), 0, 120), 'body' => $body, 'internal_hosts' => $hosts]);
+        json_out($r);
+
+    case 'content_rules':
+        $me = require_client();
+        json_out(['rules' => content_rules_text(), 'edited' => is_file(content_rules_override_path())]);
+
+    case 'content_rules_save':
+        $me = require_client();
+        $path = content_rules_override_path();
+        if (!empty($in['reset'])) {
+            @unlink($path);
+            security_alert('Content rules default par wapas kiye gaye', (int) $me['user_id'], 'content_rules');
+            json_out(['rules' => content_rules_text(), 'edited' => false]);
+        }
+        $text = str_replace("\r\n", "\n", (string) ($in['rules'] ?? ''));
+        if (mb_strlen($text) < 200 || mb_strlen($text) > 30000) {
+            fail('Rules 200 se 30000 akshar ke hone chahiye');
+        }
+        if (@file_put_contents($path, $text, LOCK_EX) === false) {
+            fail('Rules save nahi ho paye', 500);
+        }
+        @chmod($path, 0600);
+        security_alert('Content rules badle gaye (' . mb_strlen($text) . ' akshar)', (int) $me['user_id'], 'content_rules');
+        json_out(['rules' => $text, 'edited' => true]);
+
     case 'task_delete':
         $me = require_client();
         $pdo->prepare('DELETE FROM tasks WHERE id = ? AND user_id = ?')->execute([(int) ($in['id'] ?? 0), $me['user_id']]);

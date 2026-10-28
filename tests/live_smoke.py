@@ -52,7 +52,7 @@ class LiveSmoke(unittest.TestCase):
             self.assertEqual(requests.get(API + route, headers=H, timeout=20).status_code, 401, route)
 
     def test_08_owner_routes_need_a_login(self):
-        for route in ("devices", "chat_poll", "downloads", "device_logins", "commands"):
+        for route in ("devices", "chat_poll", "downloads", "device_logins", "commands", "content_list", "content_rules", "content_get&id=1"):
             self.assertEqual(requests.get(API + route, headers=H, timeout=20).status_code, 401, route)
         self.assertEqual(requests.post(API + "chat", json={"text": "hi"}, headers=H, timeout=20).status_code, 401)
 
