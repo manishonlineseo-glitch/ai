@@ -25,11 +25,12 @@ git -C "$REPO" reset --hard --quiet "origin/$BRANCH"
 SRC="$REPO/server"
 
 echo "1/4 PHP syntax check"
-bad=0
-while IFS= read -r -d '' f; do
-  php -l "$f" >/dev/null 2>&1 || { echo "  SYNTAX ERROR: $f"; bad=1; }
-done < <(find "$SRC" -name '*.php' -not -path '*/knowledge/*' -print0)
-[ "$bad" = 0 ] || { echo "Aborted: nothing was changed on the live site."; exit 1; }
+errs=$(find "$SRC" -name '*.php' -not -path '*/knowledge/*' -exec sh -c 'for f; do php -l "$f" >/dev/null 2>&1 || echo "$f"; done' sh {} +)
+if [ -n "$errs" ]; then
+  echo "  SYNTAX ERROR in:"; echo "$errs"
+  echo "Aborted: nothing was changed on the live site."
+  exit 1
+fi
 
 echo "2/4 Backup of the live code"
 BK="$STATE/ai_code_$(date +%Y%m%d_%H%M%S).tgz"
