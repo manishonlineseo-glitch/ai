@@ -80,6 +80,46 @@ function db_retry(callable $fn, int $tries = 4): mixed
     }
 }
 
+/**
+ * Once a day (called from the scheduler, which the agent and the open web page tick every minute or two): a complete copy of the
+ * database in jarvis_data/backups/, integrity-checked, last 14 kept. The hosting plan has no cron, so the app does it itself.
+ * Returns the new file's path, or null when none was due.
+ */
+function db_backup_if_due(): ?string
+{
+    if ((int) kv_get('last_db_backup') > time() - 86400) {
+        return null;
+    }
+    $dir = dirname((string) cfg('db_path')) . '/backups';
+    if (!is_dir($dir)) {
+        @mkdir($dir, 0700, true);
+    }
+    $file = $dir . '/app_' . date('Ymd_His') . '.sqlite';
+    if (file_exists($file)) {
+        return null; // two ticks in the same second: never touch a copy that already exists
+    }
+    try {
+        db()->exec('VACUUM INTO ' . db()->quote($file));
+        $check = new PDO('sqlite:' . $file);
+        if ($check->query('PRAGMA integrity_check')->fetchColumn() !== 'ok') {
+            throw new RuntimeException('integrity check failed');
+        }
+        @chmod($file, 0600);
+        $all = glob($dir . '/app_*.sqlite') ?: [];
+        rsort($all);
+        foreach (array_slice($all, 14) as $old) {
+            @unlink($old);
+        }
+        kv_set('last_db_backup', (string) time());
+        return $file;
+    } catch (Throwable $e) {
+        @unlink($file);
+        @file_put_contents(__DIR__ . '/../data/security.log', gmdate('c') . ' [backup] database backup failed: ' . $e->getMessage() . "\n", FILE_APPEND);
+        kv_set('last_db_backup', (string) (time() - 86400 + 3600)); // try again in an hour
+        return null;
+    }
+}
+
 function kv_get(string $key): ?string
 {
     $st = db()->prepare('SELECT v FROM kv WHERE k = ?');

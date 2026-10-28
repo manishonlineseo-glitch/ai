@@ -400,7 +400,8 @@ function claude_tools(): array
              'text'    => ['type' => 'string', 'description' => 'Optional pre-filled WhatsApp text'],
              'query'   => ['type' => 'string', 'description' => 'For youtube_search / maps_search'],
          ], 'required' => ['action']]],
-        ['name' => 'add_task', 'description' => 'Add a task to the board. category: development, marketing, research, news, social or other. '
+        ['name' => 'add_task', 'description' => 'Add a task to the board. category: development, marketing, research, news, social, content or other. '
+            . 'ANY request to write a blog, article, page copy or website content = category content, assignee jarvis, details = the whole brief (topic, focus keyword, brand, language, pages to link to, word count): Jarvis then writes it to the owner\'s Content Rules and checks it. '
             . 'assignee "jarvis" means Jarvis does the work itself (news summary, web research, post drafts, a plan); "me" is for the user. '
             . 'Put the full brief in details.',
          'input_schema' => ['type' => 'object', 'properties' => [

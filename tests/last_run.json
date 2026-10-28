@@ -1,5 +1,5 @@
 {
-  "date": "2026-10-28T14:32:30+05:30",
+  "date": "2026-10-28T14:40:09+05:30",
   "suites": {
     "server_test": {
       "tests": 49,
@@ -18,7 +18,15 @@
       "ok": true
     },
     "security_test": {
-      "tests": 31,
+      "tests": 33,
+      "subchecks": 0,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "ok": true
+    },
+    "content_test": {
+      "tests": 52,
       "subchecks": 0,
       "failures": 0,
       "errors": 0,
@@ -26,7 +34,7 @@
       "ok": true
     }
   },
-  "total_tests": 113,
+  "total_tests": 167,
   "total_subchecks": 33,
   "all_ok": true
 }

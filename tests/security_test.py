@@ -332,5 +332,37 @@ class T26_Alerts(Base):
         self.assertIn("denied", ht.lower())
 
 
+class T27_DatabaseBackup(Base):
+    def backups(self):
+        d = os.path.join(os.path.dirname(st.DB), "backups")
+        return sorted(os.listdir(d)) if os.path.isdir(d) else []
+
+    def test_tick_makes_a_complete_checked_backup_once_a_day(self):
+        time.sleep(1.1)  # file names carry the second
+        st.sql("DELETE FROM kv WHERE k = 'last_db_backup' OR k = 'sched_lock'")
+        today = time.strftime("%Y%m%d")
+        self.assertEqual(self.owner.get(f"{st.BASE}?r=tick", headers=st.HDR).status_code, 200)
+        names = [n for n in self.backups() if n.startswith("app_" + today)]
+        self.assertGreaterEqual(len(names), 1)
+        n_today = len(names)
+        import sqlite3
+        con = sqlite3.connect(os.path.join(os.path.dirname(st.DB), "backups", names[-1]))
+        self.assertEqual(con.execute("PRAGMA integrity_check").fetchone()[0], "ok")
+        self.assertEqual(con.execute("SELECT count(*) FROM users").fetchone()[0], 1, "the copy holds the real data")
+        con.close()
+        st.sql("DELETE FROM kv WHERE k = 'sched_lock'")
+        self.owner.get(f"{st.BASE}?r=tick", headers=st.HDR)
+        self.assertEqual(len([n for n in self.backups() if n.startswith("app_" + today)]), n_today, "no second backup the same day")
+
+    def test_only_the_last_14_backups_are_kept(self):
+        d = os.path.join(os.path.dirname(st.DB), "backups")
+        os.makedirs(d, exist_ok=True)
+        for i in range(20):
+            open(os.path.join(d, f"app_2020010{i % 10}_0000{i:02d}.sqlite"), "w").close()
+        st.sql("DELETE FROM kv WHERE k = 'last_db_backup' OR k = 'sched_lock'")
+        self.owner.get(f"{st.BASE}?r=tick", headers=st.HDR)
+        self.assertLessEqual(len(self.backups()), 14)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

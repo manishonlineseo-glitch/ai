@@ -8,10 +8,10 @@ declare(strict_types=1);
  * page and the PC agent call about once a minute (no cron needed).
  */
 
-const TASK_CATEGORIES = ['development', 'marketing', 'research', 'news', 'social', 'other'];
+const TASK_CATEGORIES = ['development', 'marketing', 'research', 'news', 'social', 'content', 'other'];
 const TASK_STATUSES = ['todo', 'doing', 'review', 'done'];
 const CATEGORY_LABEL = [
-    'development' => 'Development', 'marketing' => 'Marketing', 'research' => 'Research',
+    'development' => 'Development', 'marketing' => 'Marketing', 'research' => 'Research', 'content' => 'Content',
     'news' => 'News update', 'social' => 'Social media', 'other' => 'Other',
 ];
 const STATUS_LABEL = ['todo' => 'Baaki', 'doing' => 'Chal raha hai', 'review' => 'Dekhna baaki', 'done' => 'Ho gaya'];
@@ -188,6 +188,34 @@ function task_execute(array $task): void
                 ->execute([$uid, $agent['id'], 'web_research', json_encode($args, JSON_UNESCAPED_UNICODE), 'pending', time(), time()]);
             $pdo->prepare('UPDATE tasks SET run_state = "waiting_agent" WHERE id = ?')->execute([$id]);
             task_log($id, $uid, 'jarvis', 'Laptop par web research shuru kiya...');
+        } elseif ($cat === 'content') {
+            // Blogs, articles, page copy: written to the owner's Content Rules, measured by a program, rewritten until it passes.
+            task_log($id, $uid, 'jarvis', 'Content likh raha hoon (rules ke hisaab se, phir check karke sudharunga)...');
+            $w = content_write($uid, $topic);
+            $d = $w['doc'];
+            $r = $w['result'];
+            $head = ($r['pass'] ? "Content tayyar: Yoast/readability ke sab zaroori checks PASS (" . $w['rounds'] . " round). " : "Content tayyar, par ye checks abhi bhi fail hain (" . $w['rounds'] . " round ke baad):
+- " . implode("
+- ", $r['failed']) . "
+
+")
+                . "ZeroGPT, grammar aur plagiarism aap khud check karo (mai ye check nahi kar sakta).";
+            task_finish($uid, $task, 'review', $head . "
+
+Focus keyword: " . $d['focus_keyword'] . "
+SEO title (" . mb_strlen($d['seo_title']) . "): " . $d['seo_title']
+                . "
+Meta description (" . mb_strlen($d['meta_description']) . "): " . $d['meta_description'] . "
+Slug: " . $d['slug'] . "
+Words: " . $r['words']
+                . "
+
+---
+" . $d['body'] . "
+---
+
+CHECK REPORT:
+" . content_report($r));
         } elseif ($cat === 'social') {
             $text = gemini_text("Is topic par social media post ke 3 alag draft likho (Hindi/Hinglish, har ek 2-4 line, 3-5 hashtags, ek me call-to-action). "
                 . "Sirf draft likho, kuch post mat karo.\n\n" . knowledge_context($topic, 1, 2500) . "\nTOPIC: " . $topic);
@@ -316,6 +344,9 @@ function scheduler_run(): array
     $ran = [];
     $deadline = $now + 110;
     try {
+        if (db_backup_if_due()) {
+            $ran[] = 'db_backup';
+        }
         foreach ($pdo->query('SELECT id FROM users')->fetchAll(PDO::FETCH_COLUMN) as $uid) {
             $uid = (int) $uid;
             routines_seed($uid);

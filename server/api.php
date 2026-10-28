@@ -17,6 +17,7 @@ require __DIR__ . '/lib/medical.php';
 require __DIR__ . '/lib/library.php';
 require __DIR__ . '/lib/memory.php';
 require __DIR__ . '/lib/leads.php';
+require __DIR__ . '/lib/content_rules.php';
 require __DIR__ . '/lib/tasks.php';
 require __DIR__ . '/lib/brain.php';
 require __DIR__ . '/lib/claude.php';
