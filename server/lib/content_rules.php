@@ -301,7 +301,12 @@ function content_check(array $doc): array
     $failed = [];
     foreach ($checks as $c) {
         if (!$c['ok'] && $c['hard']) {
-            $failed[] = $c['label'] . ': now ' . $c['value'] . ', need ' . $c['need'];
+            $hint = '';
+            if (in_array($c['id'], ['title_len', 'meta_len'], true) && ctype_digit($c['value'])) {
+                [$lo, $hi] = $c['id'] === 'title_len' ? [50, 60] : [120, 155];
+                $hint = (int) $c['value'] < $lo ? '; add at least ' . ($lo - (int) $c['value']) . ' characters' : '; cut at least ' . ((int) $c['value'] - $hi) . ' characters';
+            }
+            $failed[] = $c['label'] . ': now ' . $c['value'] . ', need ' . $c['need'] . $hint;
         }
     }
     $advice = [];
@@ -392,6 +397,7 @@ function content_write(int $userId, string $brief, ?callable $generate = null, i
     $doc['internal_hosts'] = $hosts;
     $result = content_check($doc);
     $rounds = 1;
+    $trace = [['round' => 1, 'failed' => $result['failed']]];
     while (!$result['pass'] && $rounds < 4 && time() - $started < $budgetSeconds) {
         $fix = "Fix this draft. Change ONLY what is needed for the failed checks below, keep everything else, keep the same OUTPUT FORMAT (header lines, a line with ---, then the Markdown body). "
             . "Keep the writing human (no stock AI phrases, no em dashes, varied sentence length).\n\nFAILED CHECKS (with the numbers measured on the current draft):\n- "
@@ -401,8 +407,14 @@ function content_write(int $userId, string $brief, ?callable $generate = null, i
         if ($next['body'] === '') {
             break;
         }
+        foreach (['focus_keyword', 'seo_title', 'meta_description', 'slug'] as $field) { // a header line the model left out keeps its old value
+            if ($next[$field] === '') {
+                $next[$field] = $doc[$field];
+            }
+        }
         $next['internal_hosts'] = $hosts;
         $new = content_check($next);
+        $trace[] = ['round' => $rounds + 1, 'failed' => $new['failed'], 'kept' => count($new['failed']) <= count($result['failed'])];
         // keep the better of the two drafts (fewer failed hard checks), so a bad revision never makes things worse
         if (count($new['failed']) <= count($result['failed'])) {
             $doc = $next;
@@ -410,5 +422,5 @@ function content_write(int $userId, string $brief, ?callable $generate = null, i
         }
         $rounds++;
     }
-    return ['doc' => $doc, 'result' => $result, 'rounds' => $rounds];
+    return ['doc' => $doc, 'result' => $result, 'rounds' => $rounds, 'trace' => $trace];
 }

@@ -273,6 +273,20 @@ class T35_ParsingAndWriterLoop(unittest.TestCase):
         d = cli({"op": "parse", "raw": "Just an article with no header."})
         self.assertEqual(d["body"], "Just an article with no header.")
 
+    def test_length_failures_say_how_many_characters_to_add_or_cut(self):
+        r = check(seo_title="Payment failed fixes for small shops", meta_description="Payment failed at your counter? " + "More words here. " * 10)
+        text = " | ".join(r["failed"])
+        self.assertRegex(text, r"SEO title 50-60 characters: now 36, need 50-60; add at least 14 characters")
+        self.assertRegex(text, r"Meta description 120-155 characters: now \d+, need 120-155; cut at least \d+ characters")
+
+    def test_header_lines_the_model_leaves_out_of_a_fix_keep_their_old_values(self):
+        bad = {**GOOD, "seo_title": "Payment failed fixes for small shops"}
+        title_only_reply = "SEO_TITLE: " + GOOD["seo_title"] + "\n---\n" + GOOD_BODY
+        w = cli({"op": "write", "brief": "x", "drafts": [formatted(bad), title_only_reply]})
+        self.assertTrue(w["pass"], w["failed"])
+        self.assertEqual(w["doc"]["focus_keyword"], "payment failed")
+        self.assertEqual(w["doc"]["slug"], GOOD["slug"])
+
     def test_writer_stops_at_once_when_the_first_draft_passes(self):
         w = cli({"op": "write", "brief": "Blog about failed payments", "drafts": [formatted(GOOD)]})
         self.assertTrue(w["pass"])
