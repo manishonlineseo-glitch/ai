@@ -34,8 +34,9 @@ function reflex_match(int $userId, string $text): ?array
         return ['reply' => "Theek hai, aap $label hain. Ab main usi level par aasan Hinglish me samjhaunga. Practice ke liye bolo: \"anatomy ka mcq pucho\" (ya pharmacology, medicine, surgery...).", 'actions' => []];
     }
 
-    $pc = online_agent($userId);
+    $pc = online_agent($userId, $t);
     $pcName = $pc ? (string) $pc['name'] : null;
+    $target = reflex_target($t); // 'pc' or 'phone': from the words, else the device the owner is speaking from
 
     // laptop status
     if ($pcName && preg_match('/^(laptop|pc|computer)( ka)? (cpu|ram|status|battery)( (aur|and) (cpu|ram|status|battery))?( batao| dikhao| kya hai)?$|^(cpu|ram) (kitna|kya)( hai)?$/u', $t)) {
@@ -48,13 +49,17 @@ function reflex_match(int $userId, string $text): ?array
             'actions' => [['tool' => 'pc_command', 'input' => ['device' => $pcName, 'action' => 'lock']]]];
     }
 
-    $phone = brain_phone_agent($userId);
+    $phone = brain_phone_agent($userId, $t);
 
     // "youtube par <song> chala" / "play <song> on youtube"
     if (preg_match('/\b(chala|chalao|chalado|chala do|play|bajao|bajado|laga do|lagao)\b/u', $t) && preg_match('/youtube|\bsong\b|gaana|gana/u', $t)) {
-        $q = preg_replace('/\b(youtube|yt|par|pe|per|me|mein|on|chalao|chala|chalado|do|play|karo|kar|bajao|bajado|laga|lagao|song|gaana|gana|ye|yeh|ek|mujhe|mere liye|please|plz|jarvis|ko|the)\b/u', ' ', $t) ?? '';
+        $q = preg_replace('/\b(youtube|yt|par|pe|per|me|mein|mai|on|ka|ki|ke|mobile|phone|laptop|pc|computer|chalao|chala|chalado|do|play|karo|kar|bajao|bajado|laga|lagao|song|gaana|gana|ye|yeh|ek|mujhe|mere liye|please|plz|jarvis|ko|the)\b/u', ' ', $t) ?? '';
         $q = trim(preg_replace('/\s+/u', ' ', $q) ?? '');
         if (mb_strlen($q) >= 2) {
+            if ($target === 'pc' && $pcName) { // spoken to / about the laptop: open the YouTube results there
+                return ['reply' => 'Laptop par "' . $q . '" YouTube par khol raha hoon.',
+                    'actions' => [['tool' => 'pc_command', 'input' => ['device' => $pcName, 'action' => 'open_url', 'url' => 'https://www.youtube.com/results?search_query=' . rawurlencode($q)]]]];
+            }
             if ($phone) {
                 return ['reply' => 'Phone par "' . $q . '" chala raha hoon.',
                     'actions' => [['tool' => 'pc_command', 'input' => ['device' => $phone, 'action' => 'phone_youtube_play', 'query' => $q]]]];
@@ -62,6 +67,35 @@ function reflex_match(int $userId, string $text): ?array
             return ['reply' => '"' . $q . '" YouTube par dhundh liya hai, neeche button dabao.',
                 'actions' => [['tool' => 'phone_action', 'input' => ['action' => 'youtube_search', 'query' => $q]]]];
         }
+    }
+
+    // "laptop me chrome kholo" / "youtube kholo": opened by rule, no AI call, so it starts in about a second
+    if ($open = reflex_open($t, $target)) {
+        if (($open['cmd']['action'] ?? '') === 'phone_open_url') {
+            $ph = brain_phone_agent($userId, $t);
+            if ($ph) {
+                return ['reply' => $open['label'] . ' phone par khol raha hoon.',
+                    'actions' => [['tool' => 'pc_command', 'input' => ['device' => $ph] + $open['cmd']]]];
+            }
+            $open['cmd']['action'] = 'open_url'; // no phone agent online: use the laptop
+        }
+        if (!$pcName) {
+            return ['reply' => 'Laptop agent abhi offline hai, isliye ' . $open['label'] . ' nahi khol sakta. Laptop par Jarvis agent chalu karo.', 'actions' => []];
+        }
+        return ['reply' => $open['label'] . ' khol raha hoon.',
+            'actions' => [['tool' => 'pc_command', 'input' => ['device' => $pcName] + $open['cmd']]]];
+    }
+
+    // "claude par kya chal raha hai" / "claude ki history batao": read the laptop's Claude Code session records, no AI call
+    if (preg_match('/claude|clod|cloud|clode|क्लॉड|क्लाउड|क्लोड/u', $t)
+        && preg_match('/kya (chal|chl|kam|kaam)|kaun|kis (par|pe|per)|kis ka|history|histry|progress|session|status|चल रहा|हिस्ट्री/u', $t)
+        && !preg_match('/\b(cloud (storage|server|hosting|computing)|aws|azure)\b/u', $t)) {
+        if (!$pcName) {
+            return ['reply' => 'Laptop agent abhi offline hai, isliye Claude ki history nahi padh sakta.', 'actions' => []];
+        }
+        $hours = preg_match('/week|hafte|hafta|सप्ताह/u', $t) ? 168 : (preg_match('/\b(kal|yesterday|2 din|do din)\b/u', $t) ? 48 : 24);
+        return ['reply' => 'Laptop par Claude ki chat history dekh raha hoon, jawab abhi chat me aayega.',
+            'actions' => [['tool' => 'pc_command', 'input' => ['device' => $pcName, 'action' => 'claude_sessions', 'hours' => $hours]]]];
     }
 
     // "<contact> ko call karo" / "call <contact>" (only for a name that is in the allowed contacts)
@@ -74,6 +108,86 @@ function reflex_match(int $userId, string $text): ?array
             }
             return ['reply' => $name . ' ko call: neeche button dabao.',
                 'actions' => [['tool' => 'phone_action', 'input' => ['action' => 'call', 'contact' => $name]]]];
+        }
+    }
+    return null;
+}
+
+/** Short "open <app or site>" commands (Hinglish, English or Devanagari). Returns ['label', 'cmd'] or null. */
+/** 'pc' or 'phone': the device the words name ("laptop par ...", "mobile me ..."), else the one the owner is speaking from. */
+function reflex_target(string $t): ?string
+{
+    $phone = (bool) preg_match('/\b(mobile|phone|android|fone)\b|फोन|मोबाइल/u', $t);
+    $pc = (bool) preg_match('/\b(laptop|pc|computer|desktop)\b|लैपटॉप|कंप्यूटर/u', $t);
+    if ($pc && !$phone) {
+        return 'pc';
+    }
+    if ($phone && !$pc) {
+        return 'phone';
+    }
+    return $pc && $phone ? null : client_kind();
+}
+
+function reflex_open(string $t, ?string $target = 'pc'): ?array
+{
+    $verb = '(open|kholo|kholna|khol do|khol de|khol|kholiye|chalu karo|chalu kar do|chalao|chala do|start karo|start|launch|ओपन|खोलो|खोल|चालू|चलाओ)';
+    if (!preg_match('/(^|\s)' . $verb . '(\s|$)/u', $t) || mb_strlen($t) > 90) {
+        return null;
+    }
+    if ($target === null) {
+        return null; // names both devices: let the AI sort it out
+    }
+    if (preg_match('/\b(aur|and|then|phir|fir|search|dhundh|dhoondh|likh|bhej|download|install|delete|band|karke)\b/u', $t)) {
+        return null; // a longer job, leave it to the AI
+    }
+    $apps = [
+        'chrome'     => ['Chrome', '/chrome|crome|क्रोम|browser|ब्राउज़र|ब्राउजर/u'],
+        'edge'       => ['Edge', '/\bedge\b/u'],
+        'notepad'    => ['Notepad', '/notepad|नोटपैड/u'],
+        'calculator' => ['Calculator', '/calculator|calc\b|कैलकुलेटर/u'],
+        'explorer'   => ['File Explorer', '/explorer|file manager|my computer|this pc|फाइल/u'],
+        'vscode'     => ['VS Code', '/vs ?code|visual studio code|\bcode\b|वीएस कोड|कोड/u'],
+        'paint'      => ['Paint', '/\bpaint\b/u'],
+        'cmd'        => ['Command Prompt', '/\bcmd\b|command prompt/u'],
+        'word'       => ['Word', '/\bword\b|ms word/u'],
+        'excel'      => ['Excel', '/\bexcel\b/u'],
+    ];
+    $sites = [
+        'https://www.youtube.com/'        => ['YouTube', '/youtube|यूट्यूब|\byt\b/u'],
+        'https://mail.google.com/'        => ['Gmail', '/gmail|जीमेल/u'],
+        'https://www.google.com/'         => ['Google', '/\bgoogle\b|गूगल/u'],
+        'https://web.whatsapp.com/'       => ['WhatsApp Web', '/whatsapp|व्हाट्सएप|व्हाट्सऐप/u'],
+        'https://github.com/'             => ['GitHub', '/github/u'],
+        'https://chatgpt.com/'            => ['ChatGPT', '/chatgpt/u'],
+        'https://claude.ai/'              => ['Claude', '/claude/u'],
+    ];
+    foreach ($sites as $url => [$label, $re]) { // a site name beats the generic word "browser"
+        if (preg_match($re, $t)) {
+            return ['label' => $label, 'cmd' => ['action' => $target === 'phone' ? 'phone_open_url' : 'open_url', 'url' => $url]];
+        }
+    }
+    if (preg_match('/\b(mobile|phone|android|fone)\b|फोन|मोबाइल/u', $t)) {
+        return null; // programs only exist on the laptop; "phone me <app>" goes to the AI
+    }
+    foreach ($apps as $app => [$label, $re]) {
+        if (preg_match($re, $t)) {
+            $cmd = ['action' => 'open_app', 'app' => $app];
+            if ($app === 'chrome') { // "chrome open karo udaypur": whatever is left over names the Chrome profile
+                $left = preg_replace('/(^|\s)(laptop|lappy|pc|computer|ka|ki|ke|me|mein|mai|par|pe|per|ko|wala|wale|wali|profile|account|chrome|crome|browser|google|क्रोम|ब्राउज़र|ब्राउजर|लैपटॉप|का|की|में|मे|पर|को|प्रोफाइल|open|kholo|kholna|khol|do|de|kar|karo|kro|krdo|chalu|chalao|chala|start|launch|the|please|plz|jarvis|ओपन|खोलो|खोल|चालू|चलाओ)(?=\s|$)/u', ' ', $t) ?? '';
+                $left = trim(preg_replace('/\s+/u', ' ', $left) ?? '');
+                if ($left !== '' && mb_strlen($left) <= 40) {
+                    $cmd['profile'] = $left;
+                }
+            }
+            return ['label' => $label . (isset($cmd['profile']) ? ' (' . $cmd['profile'] . ')' : ''), 'cmd' => $cmd];
+        }
+    }
+    // Any other program ("laptop par photoshop kholo"): the agent looks it up in the Start Menu. Only when the laptop is named.
+    if ($target === 'pc' && preg_match('/\b(laptop|pc|computer|desktop)\b|लैपटॉप|कंप्यूटर/u', $t)) {
+        $left = preg_replace('/(^|\s)(laptop|pc|computer|desktop|ka|ki|ke|me|mein|mai|par|pe|per|ko|app|application|software|program|wala|open|kholo|kholna|khol|do|de|kar|karo|kro|krdo|chalu|chalao|chala|start|launch|the|please|plz|jarvis|ओपन|खोलो|खोल|चालू|चलाओ|लैपटॉप|कंप्यूटर|का|की|में|पर|को)(?=\s|$)/u', ' ', $t) ?? '';
+        $left = trim(preg_replace('/\s+/u', ' ', $left) ?? '');
+        if ($left !== '' && preg_match('/^[a-z0-9 ._\-]{2,40}$/', $left)) {
+            return ['label' => $left, 'cmd' => ['action' => 'open_app', 'app' => $left]];
         }
     }
     return null;

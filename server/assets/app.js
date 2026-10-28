@@ -901,51 +901,10 @@ let recentBox = null;
 function viewDevices(view) {
   devicesBox = h('div', { class: 'card' });
   recentBox = h('div', { class: 'card' });
-  const out = h('div');
-  const err = h('div', { class: 'error', role: 'alert' });
-  const name = h('input', { placeholder: 'PC ka naam, jaise Home-PC', maxlength: 40, 'aria-label': 'PC agent name' });
-
-  const pairOut = h('div');
-  const pairErr = h('div', { class: 'error', role: 'alert' });
-  const pairName = h('input', { placeholder: 'Device ka naam, jaise iPhone Office', maxlength: 40, 'aria-label': 'New device name', required: true });
-  const pairType = typeSelect('iphone');
-  const pairForm = h('form', { onsubmit: async (e) => {
-    e.preventDefault();
-    pairErr.textContent = '';
-    try {
-      const r = await api('pair_create', { name: pairName.value, type: pairType.value });
-      pairOut.replaceChildren(
-        h('div', { class: 'pair-code mono', 'aria-label': 'Device code' }, r.code),
-        h('p', { class: 'muted' }, r.name + ' par ' + location.origin + ' kholo, "Device code se jodo" dabao aur ye code daalo. 15 minute me ek hi baar chalega.'));
-      pairName.value = '';
-    } catch (x) { pairErr.textContent = x.message; }
-  } }, pairName, pairType, pairErr, h('button', { type: 'submit' }, 'Code banao'));
-
   page(view,
     h('h2', null, 'Mere devices'), devicesBox,
     h('h2', null, 'Device ID aur Password'), deviceIdsCard(),
-    h('h2', null, 'Naya device jodo (code se)'),
-    h('div', { class: 'card' },
-      h('p', { class: 'muted' }, 'Phone/TV par password type karne ki jagah ek baar ka code use karo.'),
-      pairForm, pairOut),
     h('h2', null, 'Apps (download karke install karo)'), appsCard(),
-    h('h2', null, 'PC agent jodo (purana tareeka: token)'),
-    h('div', { class: 'card' },
-      h('p', { class: 'muted' }, 'Windows app ho to upar wala code use karo. Ye sirf manual agent.py ke liye hai. Token sirf ek baar dikhega.'),
-      h('form', { class: 'row', onsubmit: async (e) => {
-        e.preventDefault();
-        err.textContent = '';
-        try {
-          const r = await api('agent_create', { name: name.value });
-          const base = location.origin + location.pathname.replace(/[^/]*$/, '');
-          out.replaceChildren(
-            h('p', null, 'agent/config.json me ye daalo:'),
-            h('pre', null, JSON.stringify({ server_url: base, token: r.token }, null, 2)));
-          name.value = '';
-          loadDevices();
-        } catch (x) { err.textContent = x.message; }
-      } }, name, h('button', { type: 'submit' }, 'Banao')),
-      err, out),
     h('h2', null, 'Recent PC actions'), recentBox);
   loadDevices();
 }
@@ -1022,10 +981,6 @@ function appsCard() {
   const files = h('div');
   const codeOut = h('div');
   const err = h('div', { class: 'error', role: 'alert' });
-  const name = h('input', { value: 'Laptop-PC', maxlength: 40, 'aria-label': 'PC ka naam' });
-  const phoneName = h('input', { value: 'Phone', maxlength: 40, 'aria-label': 'Phone ka naam' });
-  const phoneOut = h('div');
-
   api('downloads').then(({ files: fs }) => {
     files.replaceChildren(...(fs.length ? fs.map((f) => h('div', { class: 'item' },
       h('div', { class: 'grow' }, h('div', null, f.label), h('div', { class: 'muted' }, (f.size / 1048576).toFixed(1) + ' MB · ' + fmtTime(f.date))),
@@ -1035,28 +990,10 @@ function appsCard() {
 
   return h('div', { class: 'card' },
     files,
-    h('h2', null, 'Windows app jodne ke liye code'),
-    h('p', { class: 'muted' }, 'Windows app kholo, ye code daalo. Code 15 minute me ek hi baar chalta hai.'),
-    h('form', { class: 'row', onsubmit: async (e) => {
-      e.preventDefault();
-      err.textContent = '';
-      try {
-        const r = await api('pair_create', { name: name.value, type: 'laptop', role: 'agent' });
-        codeOut.replaceChildren(h('div', { class: 'pair-code mono' }, r.code));
-      } catch (x) { err.textContent = x.message; }
-    } }, name, h('button', { type: 'submit' }, 'Code banao')),
-    err, codeOut,
-    h('h2', null, 'Android app jodne ke liye code'),
-    h('p', { class: 'muted' }, 'APK download karke install karo, app kholo aur ye code daalo. App phone ko Jarvis ka agent bana deti hai (YouTube, call, files).'),
-    h('form', { class: 'row', onsubmit: async (e) => {
-      e.preventDefault();
-      err.textContent = '';
-      try {
-        const r = await api('pair_create', { name: phoneName.value, type: 'android', role: 'agent' });
-        phoneOut.replaceChildren(h('div', { class: 'pair-code mono' }, r.code));
-      } catch (x) { err.textContent = x.message; }
-    } }, phoneName, h('button', { type: 'submit' }, 'Code banao')),
-    phoneOut);
+    h('h2', null, 'Laptop ya phone ko kaise jodein'),
+    h('p', { class: 'muted' }, '1. Upar "Device ID aur Password" me + Naya device ID dabao: naam likho, device type chuno (Laptop / Android...), username aur password rakho.'),
+    h('p', { class: 'muted' }, '2. App download karke install karo, kholo aur wahi username/password daalo. Bas, ho gaya: koi code nahi.'),
+    h('p', { class: 'muted' }, '3. Password badalna ho to Device ID me Edit dabake naya daalo. App apne aap naye password se login ho jati hai (agar app me bhi badla ho).'));
 }
 
 // ---------- boot ----------

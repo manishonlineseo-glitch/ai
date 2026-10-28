@@ -25,6 +25,7 @@ class SettingsActivity : Activity() {
     private lateinit var permsBox: LinearLayout
     private lateinit var serverField: EditText
     private lateinit var codeField: EditText
+    private lateinit var passField: EditText
     private lateinit var pairMsg: TextView
 
     private fun dp(n: Int) = (n * resources.displayMetrics.density).toInt()
@@ -47,7 +48,7 @@ class SettingsActivity : Activity() {
         col.addView(statusView)
 
         col.addView(label("1. Phone ko Jarvis se jodo", 17f, true))
-        col.addView(label("Jarvis site > Devices > Apps > 'Android app jodne ke liye code' me code banao aur yahan daalo."))
+        col.addView(label("Jarvis site > Devices me is phone ka Username aur Password banao (Device type: Android) aur wahi yahan daalo."))
         serverField = EditText(this).apply {
             setText(Prefs.server(this@SettingsActivity))
             inputType = InputType.TYPE_TEXT_VARIATION_URI
@@ -55,13 +56,20 @@ class SettingsActivity : Activity() {
         }
         col.addView(serverField)
         codeField = EditText(this).apply {
-            hint = "Code (jaise K7M2-9QXA)"
-            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_CHARACTERS
-            textSize = 20f
+            hint = "Username"
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
+            setText(Prefs.loginUser(this@SettingsActivity) ?: "")
+            textSize = 18f
         }
         col.addView(codeField)
+        passField = EditText(this).apply {
+            hint = "Password"
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
+            textSize = 18f
+        }
+        col.addView(passField)
         col.addView(Button(this).apply {
-            text = "Jodo"
+            text = "Login"
             setOnClickListener { pair() }
         })
         pairMsg = label("")
@@ -137,7 +145,7 @@ class SettingsActivity : Activity() {
     }
 
     private fun refresh() {
-        statusView.text = "Status: " + Prefs.status(this) + if (Prefs.token(this) != null) "" else " (code se jodo)"
+        statusView.text = "Status: " + Prefs.status(this) + if (Prefs.token(this) != null) "" else " (login karo)"
         permsBox.removeAllViews()
         for (p in perms()) {
             val row = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(0, dp(8), 0, dp(8)) }
@@ -154,7 +162,8 @@ class SettingsActivity : Activity() {
 
     private fun pair() {
         val server = serverField.text.toString().trim().trimEnd('/') + "/"
-        val code = codeField.text.toString().trim()
+        val username = codeField.text.toString().trim()
+        val password = passField.text.toString()
         if (!server.startsWith("https://")) {
             pairMsg.text = "Server https:// se shuru hona chahiye."
             return
@@ -162,10 +171,11 @@ class SettingsActivity : Activity() {
         pairMsg.text = "Jod raha hoon..."
         Thread {
             val msg = try {
-                val r = Http.request("POST", server + "api.php?r=agent_pair", emptyMap(), JSONObject().put("code", code).toString())
+                val r = Http.request("POST", server + "api.php?r=agent_login", emptyMap(), JSONObject().put("username", username).put("password", password).toString())
                 val json = JSONObject(r.body)
                 if (r.code == 200 && json.has("token")) {
                     Prefs.save(this, server, json.getString("token"))
+                    Prefs.saveLogin(this, username, password)
                     Prefs.setStatus(this, "Jud gaya: " + json.optString("name"))
                     startForegroundService(Intent(this, PhoneAgentService::class.java))
                     "Jud gaya: ${json.optString("name")}. Ab neeche ki permissions allow karo."

@@ -5,10 +5,12 @@ Jarvis server (no open ports), asks "anything for me?" every few seconds and
 runs a small fixed set of actions. Anything not on the list is refused here
 even if the server asks for it.
 """
+import base64
 import ctypes
 import json
 import os
 import queue
+import re
 import shutil
 import subprocess
 import sys
@@ -65,6 +67,8 @@ def load_config():
     host = urlparse(url).hostname or ""
     if not url.startswith("https://") and host not in ("localhost", "127.0.0.1"):
         sys.exit("server_url https:// se shuru hona chahiye (sirf localhost par http chalta hai).")
+    if cfg.get("login") and len(cfg.get("token", "")) != 64:
+        cfg["token"] = "0" * 64  # signed in with a device ID: the first poll gets a real token by itself
     if len(cfg.get("token", "")) != 64:
         sys.exit("config.json me token galat hai (64 akshar ka hona chahiye).")
     cfg["server_url"] = url
@@ -81,6 +85,38 @@ def load_config():
     default_allowed = ALL_ACTIONS - {f"{e}_work" for e in ENGINES}
     cfg["allowed_actions"] = (set(cfg.get("allowed_actions", default_allowed)) | NEWER_ACTIONS) & ALL_ACTIONS
     return cfg
+
+
+def protect_password(pw):
+    """What goes into config.json: the password encrypted with Windows DPAPI (only this Windows user on this PC can read it)."""
+    return base64.b64encode(ops._dpapi(pw.encode("utf-8"), True)).decode("ascii")
+
+
+def relogin(cfg, session, base_url):
+    """Sign in again with the saved device ID + password and swap in the new token. Returns "ok", "bad" (wrong password) or "down"."""
+    login = cfg.get("login") or {}
+    try:
+        pw = ops._dpapi(base64.b64decode(login["password"]), False).decode("utf-8")
+        r = requests.post(base_url + "agent_login", json={"username": login["username"], "password": pw}, timeout=30,
+                          headers={"X-Requested-With": "jarvis", "User-Agent": "JarvisAgent/1.0"})
+    except (KeyError, ValueError, OSError):
+        return "bad"
+    except requests.RequestException:
+        return "down"
+    if r.status_code == 200 and "token" in r.json():
+        cfg["token"] = r.json()["token"]
+        session.headers["X-Agent-Token"] = cfg["token"]
+        try:  # keep the new token so a restart does not need another sign-in
+            with open(CONFIG_PATH, encoding="utf-8") as f:
+                disk = json.load(f)
+            disk["token"] = cfg["token"]
+            with open(CONFIG_PATH + ".tmp", "w", encoding="utf-8") as f:
+                json.dump(disk, f, indent=2)
+            os.replace(CONFIG_PATH + ".tmp", CONFIG_PATH)
+        except OSError:
+            pass
+        return "ok"
+    return "bad" if r.status_code in (400, 401, 403) else "down"
 
 
 def cpu_status():
@@ -629,10 +665,17 @@ def run_action(cfg, action, args):
             return ops.open_url_profile(str(args.get("url", "")), profile)
         return open_url(str(args.get("url", "")))
     if action == "open_app":
-        path = cfg["apps"].get(str(args.get("app", "")))
+        name = str(args.get("app", ""))
+        if name.lower() == "chrome" and not cfg["apps"].get("chrome"):
+            return ops.open_chrome(str(args.get("profile") or ""))
+        path = cfg["apps"].get(name) or find_builtin_app(name)
         if not path:
-            raise PermissionError("ye app config.json ke 'apps' me nahi hai: " + str(args.get("app")))
-        subprocess.Popen([path])  # list form, no shell
+            lnk = find_start_menu_app(name)
+            if not lnk:
+                raise LookupError(f"'{name}' naam ka program laptop par nahi mila (Start Menu me bhi nahi)")
+            os.startfile(lnk)  # opens the shortcut exactly like a click in the Start Menu
+            return "chalu kiya: " + os.path.splitext(os.path.basename(lnk))[0]
+        subprocess.Popen([path], creationflags=getattr(subprocess, "CREATE_NEW_CONSOLE", 0) if name == "cmd" else 0)  # list form, no shell
         return "chalu kiya"
     if sys.platform != "win32":
         raise NotImplementedError("lock/shutdown/restart abhi sirf Windows par")
@@ -648,6 +691,59 @@ def run_action(cfg, action, args):
         subprocess.run(["shutdown", "/a"], check=True)
         return "cancel kar diya"
     raise ValueError("unknown action")
+
+
+BUILTIN_APPS = {  # everyday apps work without editing config.json; an entry in config.json "apps" still wins
+    "chrome": "chrome.exe", "edge": "msedge.exe", "notepad": "notepad.exe", "calculator": "calc.exe", "explorer": "explorer.exe",
+    "paint": "mspaint.exe", "cmd": "cmd.exe", "word": "winword.exe", "excel": "excel.exe", "vscode": "Code.exe",
+}
+
+
+def find_start_menu_app(name):
+    """Best Start Menu shortcut for a spoken program name ("photoshop", "vlc", "whatsapp"): exact, then starts-with, then contains."""
+    want = re.sub(r"[^a-z0-9]", "", name.lower())
+    if len(want) < 2 or sys.platform != "win32":
+        return None
+    roots = [os.path.join(os.environ.get("ProgramData", r"C:\ProgramData"), r"Microsoft\Windows\Start Menu\Programs"),
+             os.path.join(os.environ.get("APPDATA", ""), r"Microsoft\Windows\Start Menu\Programs")]
+    best, best_score = None, 0
+    for root in roots:
+        for dirpath, _dirs, files in os.walk(root):
+            for fn in files:
+                if not fn.lower().endswith(".lnk"):
+                    continue
+                have = re.sub(r"[^a-z0-9]", "", os.path.splitext(fn)[0].lower())
+                if "uninstall" in have:
+                    continue
+                score = 3 if have == want else 2 if have.startswith(want) else 1 if want in have else 0
+                if score > best_score or (score == best_score and score and best and len(have) < len(os.path.basename(best))):
+                    best, best_score = os.path.join(dirpath, fn), score
+    return best
+
+
+def find_builtin_app(name):
+    """Full path of a well-known app: Windows' App Paths registry first, then the usual install folders."""
+    exe = BUILTIN_APPS.get(name.strip().lower())
+    if not exe or sys.platform != "win32":
+        return None
+    import winreg
+    for root in (winreg.HKEY_LOCAL_MACHINE, winreg.HKEY_CURRENT_USER):
+        try:
+            with winreg.OpenKey(root, r"Software\Microsoft\Windows\CurrentVersion\App Paths" + "\\" + exe) as k:
+                path = winreg.QueryValueEx(k, "")[0].strip('"')
+                if os.path.isfile(path):
+                    return path
+        except OSError:
+            pass
+    win = os.environ.get("SystemRoot", r"C:\Windows")
+    pf, pf86, local = os.environ.get("ProgramFiles", ""), os.environ.get("ProgramFiles(x86)", ""), os.environ.get("LOCALAPPDATA", "")
+    for p in (os.path.join(win, exe), os.path.join(win, "System32", exe),
+              os.path.join(pf, "Google", "Chrome", "Application", exe), os.path.join(pf86, "Google", "Chrome", "Application", exe),
+              os.path.join(local, "Google", "Chrome", "Application", exe), os.path.join(pf86, "Microsoft", "Edge", "Application", exe),
+              os.path.join(local, "Programs", "Microsoft VS Code", exe)):
+        if os.path.isfile(p):
+            return p
+    return shutil.which(exe)
 
 
 def run(cfg, stop=None, on_status=None):
@@ -709,9 +805,19 @@ def run(cfg, stop=None, on_status=None):
             params["wait"] = 18
             r = s.get(base + "agent_poll", params=params, timeout=40)
             if r.status_code == 401:
+                if cfg.get("login"):  # token gone (password changed, session replaced...): sign in again by itself
+                    outcome = relogin(cfg, s, cfg["server_url"] + "api.php?r=")
+                    if outcome == "ok":
+                        print("Dobara login ho gaya.", flush=True)
+                        continue
+                    status("rejected")
+                    print("Login nahi ho paya (password badla hai?)." if outcome == "bad" else "Server nahi mil raha.", "60 second baad dobara koshish.", flush=True)
+                    stop.wait(60)
+                    continue
                 status("rejected")
-                print("Server ne token reject kiya (block ya delete hua?). Agent band.", flush=True)
-                return
+                print("Server ne token reject kiya (block ya delete hua?). 20 second baad dobara koshish.", flush=True)
+                stop.wait(20)
+                continue
             if r.status_code in (403, 429, 503) or "json" not in r.headers.get("Content-Type", ""):
                 # the host's firewall asked for a pause or sent a "checking your browser" page: back off instead of hammering it
                 status("blocked")

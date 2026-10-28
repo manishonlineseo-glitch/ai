@@ -14,7 +14,7 @@ import threading
 import time
 from ctypes import wintypes
 
-VERSION = "1.2.1"
+VERSION = "1.2.3"
 
 HOME = os.environ.get("JARVIS_AGENT_HOME") or os.path.dirname(os.path.abspath(__file__))
 VAULT_PATH = os.path.join(HOME, "vault.bin")
@@ -51,6 +51,27 @@ def find_chrome():
             if os.path.exists(p):
                 return p
     raise FileNotFoundError("chrome.exe nahi mila")
+
+
+def open_chrome(query=""):
+    """Open Chrome straight into a profile (matched by name, email or folder) so the "Who's using Chrome?" picker never shows.
+    No query: the profile used last."""
+    with open(os.path.join(chrome_user_data(), "Local State"), encoding="utf-8") as f:
+        prof = json.load(f)["profile"]
+    info = prof.get("info_cache", {})
+    q = (query or "").strip().lower()
+    pick = None
+    if q:
+        def fields(k, v):
+            return [k.lower(), str(v.get("name", "")).lower(), str(v.get("user_name", "")).lower(), str(v.get("gaia_name", "")).lower()]
+        pick = next((k for k, v in info.items() if q in fields(k, v)), None) or             next((k for k, v in info.items() if any(q in x for x in fields(k, v))), None)
+        if not pick:
+            raise LookupError(f"Chrome me '{query}' naam ka profile nahi mila. Profiles: " + ", ".join(v.get("name", k) for k, v in info.items()))
+    else:
+        pick = prof.get("last_used") or ("Default" if "Default" in info else next(iter(info), None))
+    args = [find_chrome()] + ([f"--profile-directory={pick}"] if pick else [])
+    subprocess.Popen(args)  # list form, no shell
+    return f"Chrome khul gaya ({info.get(pick, {}).get('name', pick)})"
 
 
 def open_url_profile(url, profile):
@@ -98,6 +119,134 @@ def guard():
     return title
 
 
+# ------------------------------------------------------------------ "see what Jarvis is doing": banner, click ring and a visible mouse glide
+_OVQ = {"q": None}
+
+
+def _clickthrough(win):
+    """Make a Tk window ignore the mouse and never take focus, so it cannot get in the way of what Jarvis is clicking."""
+    try:
+        hwnd = ctypes.windll.user32.GetParent(win.winfo_id()) or win.winfo_id()
+        GWL_EXSTYLE, flags = -20, 0x80000 | 0x20 | 0x8000000 | 0x80  # LAYERED | TRANSPARENT | NOACTIVATE | TOOLWINDOW
+        old = ctypes.windll.user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
+        ctypes.windll.user32.SetWindowLongW(hwnd, GWL_EXSTYLE, old | flags)
+    except Exception:
+        pass
+
+
+def _overlay_loop(q):
+    import queue as _q
+    import tkinter as tk
+    try:
+        ctypes.windll.shcore.SetProcessDpiAwareness(2)  # same pixel units as the mouse and UI Automation
+    except Exception:
+        pass
+    root = tk.Tk()
+    root.withdraw()
+    state = {"banner": None, "label": None, "hide": 0.0}
+
+    def banner(text):
+        if state["banner"] is None:
+            w = tk.Toplevel(root)
+            w.overrideredirect(True)
+            w.attributes("-topmost", True)
+            w.attributes("-alpha", 0.92)
+            w.configure(bg="#0b1020")
+            lab = tk.Label(w, text="", bg="#0b1020", fg="#7cffb2", font=("Segoe UI", 14, "bold"), padx=20, pady=8)
+            lab.pack()
+            state["banner"], state["label"] = w, lab
+            _clickthrough(w)
+        state["label"].config(text="● Jarvis kaam kar raha hai: " + text)
+        w = state["banner"]
+        w.update_idletasks()
+        w.geometry(f"+{max((w.winfo_screenwidth() - w.winfo_width()) // 2, 0)}+10")
+        w.deiconify()
+        state["hide"] = time.time() + 6
+
+    def ring(x, y):
+        r = tk.Toplevel(root)
+        r.overrideredirect(True)
+        r.attributes("-topmost", True)
+        r.configure(bg="#010101")
+        r.attributes("-transparentcolor", "#010101")
+        r.geometry(f"72x72+{x - 36}+{y - 36}")
+        c = tk.Canvas(r, width=72, height=72, bg="#010101", highlightthickness=0)
+        c.pack()
+        c.create_oval(6, 6, 66, 66, outline="#ff3b30", width=5)
+        c.create_oval(30, 30, 42, 42, fill="#ff3b30", outline="")
+        _clickthrough(r)
+        r.after(900, r.destroy)
+
+    def pump():
+        try:
+            while True:
+                kind, a = q.get_nowait()
+                try:
+                    if kind == "banner":
+                        banner(*a)
+                    elif kind == "ring":
+                        ring(*a)
+                    elif kind == "hide" and state["banner"] is not None:
+                        state["banner"].withdraw()
+                except Exception:
+                    pass
+        except _q.Empty:
+            pass
+        if state["banner"] is not None and state["hide"] and time.time() > state["hide"]:
+            state["banner"].withdraw()
+            state["hide"] = 0.0
+        root.after(40, pump)
+
+    root.after(40, pump)
+    root.mainloop()
+
+
+def overlay(kind, *args):
+    """Show something on the laptop screen (never raises): overlay("banner", text), overlay("ring", x, y), overlay("hide")."""
+    try:
+        if _OVQ["q"] is None:
+            import queue as _q
+            _OVQ["q"] = _q.Queue()
+            threading.Thread(target=_overlay_loop, args=(_OVQ["q"],), daemon=True).start()
+        _OVQ["q"].put((kind, args))
+    except Exception:
+        pass
+
+
+def glide(x, y, seconds=0.45):
+    """Move the real mouse pointer to (x, y) smoothly so the owner can follow it, then flash a ring there."""
+    try:
+        pt = wintypes.POINT()
+        ctypes.windll.user32.GetCursorPos(ctypes.byref(pt))
+        x0, y0 = pt.x, pt.y
+        steps = max(int(seconds * 60), 8)
+        for i in range(1, steps + 1):
+            t = i / steps
+            t = t * t * (3 - 2 * t)  # ease in and out
+            ctypes.windll.user32.SetCursorPos(int(x0 + (x - x0) * t), int(y0 + (y - y0) * t))
+            time.sleep(seconds / steps)
+        overlay("ring", int(x), int(y))
+        time.sleep(0.25)
+    except Exception:
+        pass
+
+
+def describe_step(step):
+    kind = str(step.get("op", ""))
+    if kind == "focus":
+        return "window aage la raha hoon: " + str(step.get("window", ""))[:40]
+    if kind == "click":
+        return "click: " + (str(step.get("name", "")) or f"({step.get('x')},{step.get('y')})")[:40]
+    if kind == "type":
+        return f"type kar raha hoon ({len(str(step.get('text', '')))} akshar)"
+    if kind == "key":
+        return "key dabata hoon: " + str(step.get("keys", ""))[:30]
+    if kind == "read":
+        return "window padh raha hoon"
+    return kind
+
+
+
 def run_ops(ops):
     """Execute a list of steps like a person would. Each step: {op: focus|click|type|key|wait|read, ...}. Returns a short log."""
     import uiautomation as auto
@@ -106,6 +255,8 @@ def run_ops(ops):
     log = []
     for i, step in enumerate(ops[:25], 1):
         kind = str(step.get("op", ""))
+        overlay("banner", f"{i}/{min(len(ops), 25)} " + describe_step(step))
+        post_progress(f"{i}. {describe_step(step)}")
         if kind == "focus":
             title = agent.focus_window(str(step.get("window", "")))
             time.sleep(0.6)
@@ -114,6 +265,7 @@ def run_ops(ops):
             title = guard()
             with auto.UIAutomationInitializerInThread():
                 if "x" in step and "y" in step:
+                    glide(int(step["x"]), int(step["y"]))
                     auto.Click(int(step["x"]), int(step["y"]))
                     log.append(f"{i}. click ({step['x']},{step['y']})")
                 else:
@@ -122,7 +274,12 @@ def run_ops(ops):
                     ctrl = win.Control(searchDepth=12, SubName=name)
                     if not ctrl.Exists(4, 0.4):
                         raise LookupError(f"'{name}' naam ka button/item window me nahi mila")
-                    ctrl.Click()
+                    try:
+                        rc = ctrl.BoundingRectangle
+                        glide((rc.left + rc.right) // 2, (rc.top + rc.bottom) // 2)
+                        auto.Click((rc.left + rc.right) // 2, (rc.top + rc.bottom) // 2)
+                    except Exception:
+                        ctrl.Click()
                     log.append(f"{i}. click: {name}")
             time.sleep(0.5)
         elif kind == "type":
@@ -269,10 +426,12 @@ def vault_window(site):
 def post_progress(text):
     s, base, cmd = CTX["session"], CTX["base"], CTX["cmd"]
     if s and base and cmd:
-        try:
-            s.post(base + "agent_progress", json={"id": cmd, "text": text[:400]}, timeout=15)
-        except Exception:
-            pass
+        def send():
+            try:
+                s.post(base + "agent_progress", json={"id": cmd, "text": text[:400]}, timeout=15)
+            except Exception:
+                pass
+        threading.Thread(target=send, daemon=True).start()  # a slow network must not slow the mouse down
 
 
 def observe(window_hint=""):

@@ -1,6 +1,6 @@
 """Jarvis for Windows: a tray app that runs the PC agent.
 
-First start: asks for the one-time code from the Jarvis site (Devices tab) and pairs itself, no files to edit.
+First start: asks for the Device username and password made in the Jarvis site (Devices tab) and signs in by itself, no files to edit.
 Afterwards it lives in the system tray (green = connected), can start with Windows, and has a small Settings window
 for the project folders the AI tools may work in. Files are kept in %APPDATA%\\JarvisAgent.
 Run `JarvisAgent.exe --setup` or `--settings` to open those windows directly.
@@ -13,7 +13,7 @@ import threading
 import webbrowser
 
 APPDATA = os.environ.get("APPDATA") or os.path.expanduser("~")
-HOME = os.path.join(APPDATA, "JarvisAgent")
+HOME = os.environ.get("JARVIS_AGENT_HOME") or os.path.join(APPDATA, "JarvisAgent")
 os.makedirs(HOME, exist_ok=True)
 os.environ["JARVIS_AGENT_HOME"] = HOME  # must be set before agent.py is imported
 
@@ -85,33 +85,38 @@ def setup_window():
     import tkinter as tk
     from tkinter import messagebox
 
+    old = read_config() or {}
     root = tk.Tk()
-    root.title("Jarvis jodo")
+    root.title("Jarvis login")
     root.resizable(False, False)
     pad = {"padx": 14, "pady": 6}
-    tk.Label(root, text="Jarvis ko is PC se jodo", font=("Segoe UI", 13, "bold")).pack(**pad)
-    tk.Label(root, text="Jarvis site > Devices > Apps me 'Code banao' dabao,\nphir wo code yahan daalo (15 minute me ek hi baar chalta hai).",
+    tk.Label(root, text="Is PC ko Jarvis se jodo", font=("Segoe UI", 13, "bold")).pack(**pad)
+    tk.Label(root, text="Jarvis site > Devices me is PC ka Username aur Password banaya hai wahi daalo.\n(Naya device ID wahin '+ Naya device ID' se banta hai.)",
              justify="left").pack(**pad)
     tk.Label(root, text="Server").pack(anchor="w", padx=14)
     server = tk.Entry(root, width=44)
-    server.insert(0, (read_config() or {}).get("server_url", DEFAULT_SERVER))
+    server.insert(0, old.get("server_url", DEFAULT_SERVER))
     server.pack(padx=14)
-    tk.Label(root, text="Code (jaise K7M2-9QXA)").pack(anchor="w", padx=14, pady=(8, 0))
-    code = tk.Entry(root, width=20, font=("Consolas", 16))
-    code.pack(padx=14)
-    code.focus_set()
+    tk.Label(root, text="Username").pack(anchor="w", padx=14, pady=(8, 0))
+    user = tk.Entry(root, width=30, font=("Segoe UI", 12))
+    user.insert(0, (old.get("login") or {}).get("username", ""))
+    user.pack(padx=14)
+    tk.Label(root, text="Password").pack(anchor="w", padx=14, pady=(8, 0))
+    pw = tk.Entry(root, width=30, font=("Segoe UI", 12), show="*")
+    pw.pack(padx=14)
+    (pw if user.get() else user).focus_set()
     status = tk.Label(root, text="", fg="#b3261e", wraplength=360, justify="left")
     status.pack(**pad)
 
-    def pair():
+    def login():
         url = server.get().strip().rstrip("/") + "/"
         if not url.startswith("https://") and "localhost" not in url and "127.0.0.1" not in url:
             status.config(text="Server https:// se shuru hona chahiye.")
             return
-        status.config(text="Jod raha hoon...", fg="#444")
+        status.config(text="Login ho raha hai...", fg="#444")
         root.update()
         try:
-            r = requests.post(url + "api.php?r=agent_pair", json={"code": code.get().strip()}, timeout=30,
+            r = requests.post(url + "api.php?r=agent_login", json={"username": user.get().strip(), "password": pw.get()}, timeout=30,
                               headers={"X-Requested-With": "jarvis", "User-Agent": "JarvisAgent/1.0"})
             data = r.json()
         except (requests.RequestException, ValueError) as e:
@@ -120,15 +125,18 @@ def setup_window():
         if r.status_code != 200 or "token" not in data:
             status.config(text=data.get("error", f"Error {r.status_code}"), fg="#b3261e")
             return
-        old = read_config() or {}
         cfg = default_config(url, data["token"])
         cfg["projects"] = old.get("projects", {})  # keep folders already chosen
+        cfg["login"] = {"username": user.get().strip(), "password": agent.protect_password(pw.get())}
+        for k in ("apps", "codex", "gemini", "claude"):  # keep the owner's own settings
+            if k in old:
+                cfg[k] = old[k]
         write_config(cfg)
         messagebox.showinfo("Jarvis", f"Jud gaya: {data.get('name', 'PC')}.\nAb ye PC Jarvis se control ho sakta hai.")
         root.destroy()
 
-    tk.Button(root, text="Jodo", width=14, command=pair).pack(pady=(0, 14))
-    root.bind("<Return>", lambda e: pair())
+    tk.Button(root, text="Login", width=14, command=login).pack(pady=(0, 14))
+    root.bind("<Return>", lambda e: login())
     root.mainloop()
 
 
@@ -177,7 +185,7 @@ def settings_window():
 
     auto = tk.BooleanVar(value=autostart_enabled())
     tk.Checkbutton(root, text="Windows chalu hote hi apne aap start ho", variable=auto).pack(anchor="w", padx=14, pady=(10, 0))
-    tk.Button(root, text="Naye code se dobara jodo", command=lambda: (root.destroy(), setup_window())).pack(anchor="w", padx=14, pady=4)
+    tk.Button(root, text="Dobara login karo (naya username/password)", command=lambda: (root.destroy(), setup_window())).pack(anchor="w", padx=14, pady=4)
 
     def save():
         cfg["projects"] = projects
@@ -205,7 +213,7 @@ def make_icon(color):
 STATE_COLOR = {"online": (60, 200, 110, 255), "offline": (150, 150, 150, 255),
                "blocked": (240, 170, 40, 255), "rejected": (230, 70, 60, 255), "starting": (150, 150, 150, 255)}
 STATE_TEXT = {"online": "Jude hue hain", "offline": "Internet/server nahi mil raha", "blocked": "Server ne roka, ruk kar dobara koshish",
-              "rejected": "Token reject hua: Settings > naye code se jodo", "starting": "Shuru ho raha hai..."}
+              "rejected": "Login nahi ho paya: Settings > dobara login karo", "starting": "Shuru ho raha hai..."}
 
 
 def run_tray():

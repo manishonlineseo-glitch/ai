@@ -83,9 +83,13 @@ class PhoneAgentService : Service() {
                 val r = Http.request("GET", base + "agent_poll&wait=18" + metrics() + "&projects=", headers, null, 40_000)
                 when {
                     r.code == 401 -> {
-                        status("Server ne token reject kiya, Settings me naye code se jodo")
-                        Prefs.clearToken(this)
-                        break
+                        if (Prefs.relogin(this) != null) {
+                            status("Dobara login ho gaya")
+                            continue
+                        }
+                        status("Login nahi ho paya (password badla?), Settings me dobara login karo")
+                        sleepQuietly(60_000)
+                        continue
                     }
                     r.code in intArrayOf(403, 429, 503) || !r.contentType.contains("json") -> {
                         status("Server ne roka (HTTP ${r.code}), 2 minute ruk raha hoon")

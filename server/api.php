@@ -171,7 +171,7 @@ switch ($route) {
         }
         if ($dev) {
             // One device ID = one device: a new login replaces its older session.
-            $pdo->prepare('DELETE FROM devices WHERE login_id = ?')->execute([$dev['id']]);
+            $pdo->prepare('DELETE FROM devices WHERE login_id = ? AND role = "client"')->execute([$dev['id']]);
             set_device_cookie(create_device((int) $dev['user_id'], $dev['name'], device_type($dev['type']), 'client', (int) $dev['id']));
             json_out(['ok' => true]);
         }
@@ -219,6 +219,27 @@ switch ($route) {
             fail('Code galat hai ya expire ho gaya', 401);
         }
         json_out(['token' => create_device((int) $pc['user_id'], $pc['name'], $pc['type'] === 'android' ? 'android' : 'laptop', 'agent'), 'name' => $pc['name']]);
+
+    // The Windows / Android app signs in with the device ID and password made in the Devices tab: no code, no JSON.
+    case 'agent_login':
+        if (too_many_failures()) {
+            fail('Bahut galat koshishen. 15 minute baad try karo.', 429);
+        }
+        $st = $pdo->prepare('SELECT * FROM device_logins WHERE login_name = ?');
+        $st->execute([trim((string) ($in['username'] ?? ''))]);
+        $dl = db_fetch($st);
+        $hash = $dl['pass_hash'] ?? password_hash('dummy-password', PASSWORD_DEFAULT); // one hash check either way: no timing leak
+        if (!password_verify((string) ($in['password'] ?? ''), $hash) || !$dl) {
+            record_failure();
+            fail('Username ya password galat hai', 401);
+        }
+        // One device ID = one running agent: a new sign-in replaces the older agent session of the same ID.
+        $pdo->prepare('DELETE FROM devices WHERE login_id = ? AND role = "agent"')->execute([$dl['id']]);
+        json_out([
+            'token' => create_device((int) $dl['user_id'], $dl['name'], device_type($dl['type']), 'agent', (int) $dl['id']),
+            'name'  => $dl['name'],
+            'type'  => $dl['type'],
+        ]);
 
     case 'downloads':
         $me = require_client();
@@ -574,6 +595,20 @@ switch ($route) {
         if ($id === (int) $me['id'] && $route !== 'device_rename') {
             fail('Apne is device par ye nahi kar sakte (logout use karo)');
         }
+        $target = $pdo->prepare('SELECT name, role, last_seen FROM devices WHERE id = ? AND user_id = ?');
+        $target->execute([$id, $me['user_id']]);
+        $target = db_fetch($target);
+        @file_put_contents(__DIR__ . '/data/device_audit.log', gmdate('c') . " $route id=$id " . json_encode($target) . ' by device ' . $me['id'] . "\n", FILE_APPEND);
+        if ($route !== 'device_rename' && $target && $target['role'] === 'agent') {
+            // PC/phone agents are never blocked, and an agent that is online right now cannot be deleted by a stray tap.
+            if ($route === 'device_block') {
+                $pdo->prepare('UPDATE devices SET blocked = 0 WHERE id = ?')->execute([$id]);
+                fail('PC/phone agent ko block nahi kar sakte');
+            }
+            if (time() - (int) $target['last_seen'] < 120) {
+                fail('Ye agent abhi online hai, delete nahi hoga');
+            }
+        }
         if ($route === 'device_block') {
             $st = $pdo->prepare('UPDATE devices SET blocked = ? WHERE id = ? AND user_id = ?');
             $st->execute([empty($in['blocked']) ? 0 : 1, $id, $me['user_id']]);
@@ -800,6 +835,7 @@ switch ($route) {
             fail('Thoda ruko, bahut jaldi jaldi messages', 429);
         }
         $uid = (int) $me['user_id'];
+        $GLOBALS['jarvis_client_type'] = (string) $me['type']; // which device the owner is speaking from (decides "youtube chala do" on phone or laptop)
         try {
             if ($file) { // a photo or PDF to read (never stored on the server)
                 $mime = (string) ($file['mime'] ?? '');
@@ -946,7 +982,7 @@ switch ($route) {
             if ($rows || time() >= $until) {
                 break;
             }
-            sleep(1);
+            usleep(150000); // a command queued from the phone reaches the PC in ~0.15 s, not up to 1 s
         } while (true);
         if ($wait > 0) { // heartbeat at the end of the wait too, so the PC never looks offline between polls
             $pdo->prepare('UPDATE devices SET last_seen = ? WHERE id = ?')->execute([time(), $agent['id']]);

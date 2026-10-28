@@ -60,6 +60,9 @@ function gemini_call(string $model, array $body, int $timeout): string
         }
         kv_set('gem_block_' . $model, (string) (time() + ($perDay ? min(max($delay, 600), 86400) : 30)));
     }
+    if ($code === 0 || $code >= 500) { // timeout or overloaded: skip this model for 3 minutes instead of waiting 12-25 s on every message
+        kv_set('gem_block_' . $model, (string) (time() + 180));
+    }
     @file_put_contents(__DIR__ . '/../data/llm_errors.log', gmdate('c') . " gemini $model HTTP $code " . mb_substr($msg, 0, 200) . "\n", FILE_APPEND);
     throw new RuntimeException($model . ': ' . mb_substr($msg, 0, 120));
 }
@@ -98,6 +101,10 @@ function openai_generate(string $prompt): string
         throw new RuntimeException('openai_api_key set nahi hai');
     }
     $model = (string) (cfg('openai_model') ?: 'gpt-5.4-mini');
+    $until = (int) kv_get('openai_block');
+    if ($until > time()) {
+        throw new RuntimeException('OpenAI: abhi band (credits/quota), ' . round(($until - time()) / 60) . ' minute baad dobara');
+    }
     [$code, $j, $err] = llm_http(
         'https://api.openai.com/v1/chat/completions',
         ['Authorization: Bearer ' . $key],
@@ -108,7 +115,13 @@ function openai_generate(string $prompt): string
     if ($code === 200 && $text !== '') {
         return $text;
     }
-    throw new RuntimeException('OpenAI: ' . mb_substr($model . ': ' . llm_error_text($j, $code, $err), 0, 200));
+    $msg = llm_error_text($j, $code, $err);
+    if ($code === 402 || $code === 429 || stripos($msg, 'credits') !== false || stripos($msg, 'quota') !== false) {
+        kv_set('openai_block', (string) (time() + 6 * 3600)); // no credits: do not retry on every message
+    } elseif ($code === 0 || $code >= 500) {
+        kv_set('openai_block', (string) (time() + 180));
+    }
+    throw new RuntimeException('OpenAI: ' . mb_substr($model . ': ' . $msg, 0, 200));
 }
 
 /** Plain-text Gemini answer (no JSON mode). */

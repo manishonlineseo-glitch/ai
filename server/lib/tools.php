@@ -104,7 +104,11 @@ function clean_pc_args(string $action, array $in): array
             if (!preg_match('/^[A-Za-z0-9 _.\-]{1,40}$/', $app)) {
                 throw new InvalidArgumentException('app ka naam galat hai');
             }
-            return ['app' => $app];
+            $profile = trim((string) ($in['profile'] ?? ''));
+            if ($profile !== '' && !preg_match('/^[\p{L}\p{N} _.@\-]{1,60}$/u', $profile)) {
+                throw new InvalidArgumentException('profile ka naam galat hai');
+            }
+            return $profile !== '' ? ['app' => $app, 'profile' => $profile] : ['app' => $app];
         case 'claude_read':
         case 'claude_work':
         case 'gemini_read':
@@ -265,7 +269,18 @@ function queue_command(int $userId, string $deviceName, string $action, array $i
 {
     $agent = find_agent($userId, $deviceName);
     if (!$agent) {
-        throw new InvalidArgumentException('Is naam ka PC agent nahi mila: ' . $deviceName);
+        // A slightly different name ("Laptop" vs "Laptop PC") must not break the command: if exactly one agent of the
+        // right kind is online, it is the one the owner means.
+        $phoneAction = in_array($action, PHONE_AGENT_ACTIONS, true);
+        $st = db()->prepare(
+            'SELECT * FROM devices WHERE user_id = ? AND role = "agent" AND blocked = 0 AND last_seen > ? AND (type = "android") = ?'
+        );
+        $st->execute([$userId, time() - 30, $phoneAction ? 1 : 0]);
+        $cands = $st->fetchAll();
+        $agent = count($cands) === 1 ? $cands[0] : null;
+    }
+    if (!$agent) {
+        throw new InvalidArgumentException('Is naam ka PC agent nahi mila (ya wo offline hai): ' . $deviceName);
     }
     $isPhone = ($agent['type'] ?? '') === 'android';
     if (in_array($action, PHONE_AGENT_ACTIONS, true) !== $isPhone) {
@@ -282,13 +297,13 @@ function queue_command(int $userId, string $deviceName, string $action, array $i
 function wait_for_command(int $id, int $seconds): array
 {
     $st = db()->prepare('SELECT status, result FROM commands WHERE id = ?');
-    for ($i = 0; $i < $seconds * 2; $i++) {
+    for ($i = 0; $i < $seconds * 10; $i++) {
         $st->execute([$id]);
         $row = db_fetch($st);
         if ($row && in_array($row['status'], ['done', 'failed'], true)) {
             return $row;
         }
-        usleep(500000);
+        usleep(100000);
     }
     return ['status' => 'pending', 'result' => null];
 }
@@ -424,7 +439,7 @@ function claude_tools(): array
              'device' => ['type' => 'string', 'description' => 'Exact PC agent name from list_devices'],
              'action' => ['type' => 'string', 'enum' => PC_ACTIONS],
              'url'    => ['type' => 'string', 'description' => 'For open_url'],
-             'profile' => ['type' => 'string', 'description' => 'For open_url: Chrome profile folder (Default, Profile 23...) from CHROME PROFILES; omit for the default profile'],
+             'profile' => ['type' => 'string', 'description' => 'For open_url: Chrome profile folder (Default, Profile 23...) from CHROME PROFILES; omit for the default profile. To just open a Chrome profile use open_url with that profile and url https://www.google.com (never open_app chrome)'],
              'app'    => ['type' => 'string', 'description' => 'For open_app: a name from the agent\'s allowlist'],
              'text'   => ['type' => 'string', 'description' => 'For speak'],
              'question' => ['type' => 'string', 'description' => 'For web_research: what to research on the web (also for screen_look: what to find out)'],
