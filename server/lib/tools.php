@@ -16,13 +16,14 @@ const PHONE_AGENT_ACTIONS = ['phone_status', 'phone_notify', 'phone_open_url', '
 /** Small, reversible things run on their own; anything that edits files or powers off a PC waits for a tap. */
 const DEFAULT_AUTO_ACTIONS = [
     'cpu_status', 'speak', 'open_app', 'volume', 'lock', 'cancel_shutdown', 'claude_read', 'gemini_read', 'codex_read',
-    'screen_look', // the owner chose "no approval": the screenshot goes to their own AI login and is never stored
+    // screen_look, ui_control, operate and vault_fill are NOT here any more (2026-10-28 security review): they type, click, read the
+    // screen or fill saved passwords, so a hijacked session or a prompt-injected AI answer could abuse them. The owner can still say in chat
+    // that one of them may run on its own (standing authority); vault_fill can never be made automatic.
     'claude_sessions', // reads the laptop's own Claude Code session records, no AI involved
     'window_read', // copies a window's text (no screenshot) and has the owner's own AI explain it
     'web_research', // read-only: a web-searching AI in an empty folder, no files or shell
     'chrome_profiles', // read-only: lists the Chrome profiles (names/emails) on the laptop
-    // the owner chose a free hand on the laptop: the agent itself refuses bank/payment/password windows
-    'ui_control', 'operate', 'vault_ask', 'vault_fill', 'vault_sites',
+    'vault_ask', 'vault_sites', // open the login window on the laptop / list saved site names (never the passwords)
     'phone_status', 'phone_notify', 'phone_youtube_play', 'phone_scan_files', // harmless: report, notify, play a song, list files
     // phone_call and phone_trash_files always wait for a tap; phone_open_url only opens known sites without asking
 ];
@@ -276,9 +277,18 @@ function find_agent(int $userId, string $name): ?array
     return db_fetch($st);
 }
 
+/** Pause switch: while on, no agent receives or is given any command (chat still answers). */
+function agents_paused(int $userId): bool
+{
+    return (int) kv_get('paused_' . $userId) > 0;
+}
+
 /** Queue a command for a PC agent. Risky actions wait for the owner's approval. */
 function queue_command(int $userId, string $deviceName, string $action, array $in): array
 {
+    if (agents_paused($userId)) {
+        throw new InvalidArgumentException('Jarvis abhi PAUSE hai, koi kaam nahi chalega. Chalu karne ke liye "jarvis resume" bolo.');
+    }
     $agent = find_agent($userId, $deviceName);
     if (!$agent) {
         // A slightly different name ("Laptop" vs "Laptop PC") must not break the command: if exactly one agent of the

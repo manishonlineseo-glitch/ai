@@ -4,6 +4,7 @@ lives here (Windows DPAPI), the "operate" loop (look at the screen, decide the n
 Everything here runs only for commands the Jarvis server sends to this paired agent. Passwords never leave this PC.
 """
 import ctypes
+import ed25519
 import hashlib
 import json
 import os
@@ -14,7 +15,11 @@ import threading
 import time
 from ctypes import wintypes
 
-VERSION = "1.2.4"
+VERSION = "1.2.5"
+
+# Updates are installed only if they carry a valid Ed25519 signature from the owner's release key (deploy/release_tools.py).
+# A taken-over server can therefore not push code to this PC: it does not have the private key.
+UPDATE_PUBKEY = bytes.fromhex("07e992393a882f79180bedd4fabcd31ed2e1cf3bba17fa708fe65c114a4477ee")
 
 HOME = os.environ.get("JARVIS_AGENT_HOME") or os.path.dirname(os.path.abspath(__file__))
 VAULT_PATH = os.path.join(HOME, "vault.bin")
@@ -499,6 +504,8 @@ def check_update(session, base):
     info = r.json()
     if _vtuple(info.get("version", "0")) <= _vtuple(VERSION):
         return "latest"
+    if not ed25519.verify(UPDATE_PUBKEY, ed25519.release_message("windows", str(info.get("version")), str(info.get("sha256"))), bytes.fromhex(str(info.get("signature") or "00"))):
+        return "update ki signature galat ya nahi hai: install nahi karunga"
     new = os.path.join(HOME, "JarvisAgent.new.exe")
     h = hashlib.sha256()
     with session.get(base + "app_update_file", params={"platform": "windows"}, stream=True, timeout=300) as dl:
@@ -507,7 +514,7 @@ def check_update(session, base):
             for chunk in dl.iter_content(1 << 20):
                 h.update(chunk)
                 f.write(chunk)
-    if h.hexdigest() != info.get("sha256"):
+    if h.hexdigest() != info.get("sha256"):  # the signature covers this hash, so the file is the one the owner signed
         os.remove(new)
         return "update file galat (sha mismatch)"
     target = sys.executable

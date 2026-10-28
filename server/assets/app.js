@@ -901,7 +901,16 @@ let recentBox = null;
 function viewDevices(view) {
   devicesBox = h('div', { class: 'card' });
   recentBox = h('div', { class: 'card' });
+  const pauseBox = h('div', { class: 'card' });
+  const drawPause = async () => {
+    const { paused } = await api('status');
+    pauseBox.replaceChildren(
+      h('p', { class: paused ? 'error' : 'muted' }, paused ? 'Jarvis PAUSE hai: koi agent kaam nahi kar raha.' : 'Jarvis chalu hai. Emergency me ek tap se sab agents rok sakte ho.'),
+      h('button', { class: paused ? '' : 'danger', onclick: async () => { await api('pause', { paused: !paused }); drawPause(); } }, paused ? 'Resume (dobara chalu karo)' : 'PAUSE: sab agents roko'));
+  };
+  drawPause();
   page(view,
+    h('h2', null, 'Emergency switch'), pauseBox,
     h('h2', null, 'Mere devices'), devicesBox,
     h('h2', null, 'Device ID aur Password'), deviceIdsCard(),
     h('h2', null, 'Apps (download karke install karo)'), appsCard(),

@@ -7,7 +7,7 @@ declare(strict_types=1);
  */
 
 /** Never become automatic, whatever the owner says in chat: these need a tap on the phone (power off, deleting files, phone calls). */
-const AUTHORITY_HARD_STOP = ['shutdown', 'restart', 'phone_trash_files', 'phone_call'];
+const AUTHORITY_HARD_STOP = ['shutdown', 'restart', 'phone_trash_files', 'phone_call', 'vault_fill'];
 
 function memory_add(int $uid, string $scope, string $kind, string $text): int
 {

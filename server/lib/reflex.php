@@ -34,6 +34,18 @@ function reflex_match(int $userId, string $text): ?array
         return ['reply' => "Theek hai, aap $label hain. Ab main usi level par aasan Hinglish me samjhaunga. Practice ke liye bolo: \"anatomy ka mcq pucho\" (ya pharmacology, medicine, surgery...).", 'actions' => []];
     }
 
+    // Panic switch: "jarvis pause" / "jarvis ruk jao" stops every agent at once; "jarvis resume" starts them again.
+    if (preg_match('/^(jarvis )?(pause|ruk jao|ruk ja|stop|sab band|sab roko)( jarvis| karo| kar do)?$/u', $t) && str_contains($t, 'jarvis')) {
+        kv_set('paused_' . $userId, (string) time());
+        security_alert('Jarvis PAUSE kar diya gaya (chat se)', $userId, 'pause');
+        return ['reply' => 'Pause kar diya: koi bhi agent ab kaam nahi karega. Dobara chalu karne ke liye bolo "jarvis resume".', 'actions' => []];
+    }
+    if (preg_match('/^(jarvis )?(resume|chalu karo|chalu kar do|wapas chalu karo|start karo|continue)( jarvis)?$/u', $t) && str_contains($t, 'jarvis')) {
+        kv_set('paused_' . $userId, '0');
+        security_alert('Jarvis dobara chalu kiya gaya (chat se)', $userId, 'pause');
+        return ['reply' => 'Chalu kar diya: agents dobara kaam karenge.', 'actions' => []];
+    }
+
     $pc = online_agent($userId, $t);
     $pcName = $pc ? (string) $pc['name'] : null;
     $target = reflex_target($t); // 'pc' or 'phone': from the words, else the device the owner is speaking from

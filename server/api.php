@@ -93,6 +93,7 @@ function status_payload(array $me): array
         'tasks'      => $tasks->fetchAll(),
         'tasks_open' => (int) $open->fetchColumn(),
         'pending'    => (int) $pend->fetchColumn(),
+        'paused'     => agents_paused($uid),
         'ai'         => [
             'model'     => (string) (cfg('model') ?: 'claude-sonnet-5-5'),
             'key_set'   => (string) cfg('anthropic_api_key') !== '',
@@ -149,10 +150,10 @@ switch ($route) {
         json_out(['ok' => true]);
 
     case 'login':
-        if (too_many_failures()) {
+        $login = trim((string) ($in['username'] ?? ''));
+        if (too_many_failures($login)) {
             fail('Bahut galat koshishen. 15 minute baad try karo.', 429);
         }
-        $login = trim((string) ($in['username'] ?? ''));
         $st = $pdo->prepare('SELECT * FROM users WHERE username = ?');
         $st->execute([$login]);
         $user = db_fetch($st);
@@ -166,7 +167,7 @@ switch ($route) {
         $hash = $user['pass_hash'] ?? $dev['pass_hash'] ?? password_hash('dummy-password', PASSWORD_DEFAULT);
         $ok = password_verify((string) ($in['password'] ?? ''), $hash) && ($user || $dev);
         if (!$ok) {
-            record_failure();
+            record_failure($login);
             fail('Username ya password galat hai', 401);
         }
         if ($dev) {
@@ -222,19 +223,21 @@ switch ($route) {
 
     // The Windows / Android app signs in with the device ID and password made in the Devices tab: no code, no JSON.
     case 'agent_login':
-        if (too_many_failures()) {
+        $who = trim((string) ($in['username'] ?? ''));
+        if (too_many_failures($who)) {
             fail('Bahut galat koshishen. 15 minute baad try karo.', 429);
         }
         $st = $pdo->prepare('SELECT * FROM device_logins WHERE login_name = ?');
-        $st->execute([trim((string) ($in['username'] ?? ''))]);
+        $st->execute([$who]);
         $dl = db_fetch($st);
         $hash = $dl['pass_hash'] ?? password_hash('dummy-password', PASSWORD_DEFAULT); // one hash check either way: no timing leak
         if (!password_verify((string) ($in['password'] ?? ''), $hash) || !$dl) {
-            record_failure();
+            record_failure($who);
             fail('Username ya password galat hai', 401);
         }
         // One device ID = one running agent: a new sign-in replaces the older agent session of the same ID.
         $pdo->prepare('DELETE FROM devices WHERE login_id = ? AND role = "agent"')->execute([$dl['id']]);
+        security_alert('Device "' . $dl['name'] . '" ne login kiya (' . $dl['type'] . ', IP ' . ($_SERVER['REMOTE_ADDR'] ?? '?') . ')', (int) $dl['user_id'], 'devlogin');
         json_out([
             'token' => create_device((int) $dl['user_id'], $dl['name'], device_type($dl['type']), 'agent', (int) $dl['id']),
             'name'  => $dl['name'],
@@ -599,6 +602,9 @@ switch ($route) {
         $target->execute([$id, $me['user_id']]);
         $target = db_fetch($target);
         @file_put_contents(__DIR__ . '/data/device_audit.log', gmdate('c') . " $route id=$id " . json_encode($target) . ' by device ' . $me['id'] . "\n", FILE_APPEND);
+        if ($route !== 'device_rename') {
+            security_alert('Device ' . ($route === 'device_block' ? 'block/unblock' : 'delete') . ': ' . ($target['name'] ?? ('#' . $id)), (int) $me['user_id'], 'device_change');
+        }
         if ($route !== 'device_rename' && $target && $target['role'] === 'agent') {
             // PC/phone agents are never blocked, and an agent that is online right now cannot be deleted by a stray tap.
             if ($route === 'device_block') {
@@ -659,6 +665,7 @@ switch ($route) {
             if ((int) $cnt->fetchColumn() >= 20) {
                 fail('Bahut saare device IDs hain');
             }
+            security_alert('Naya device ID bana: ' . $name . ' (' . $loginName . ')', (int) $me['user_id'], 'device_id');
             $pdo->prepare('INSERT INTO device_logins (user_id, login_name, pass_hash, name, type, created_at) VALUES (?,?,?,?,?,?)')
                 ->execute([$me['user_id'], $loginName, password_hash($pw, PASSWORD_DEFAULT), $name, device_type($in['type'] ?? ''), time()]);
             json_out(['ok' => true, 'id' => (int) $pdo->lastInsertId()]);
@@ -669,6 +676,7 @@ switch ($route) {
             fail('Device ID nahi mila', 404);
         }
         if ($pw !== '') {
+            security_alert('Device ID password badla: ' . $loginName, (int) $me['user_id'], 'device_id');
             $pdo->prepare('UPDATE device_logins SET pass_hash = ? WHERE id = ?')->execute([password_hash($pw, PASSWORD_DEFAULT), $id]);
             // Password changed: that device must log in again.
             $pdo->prepare('DELETE FROM devices WHERE login_id = ? AND id <> ?')->execute([$id, $me['id']]);
@@ -683,6 +691,13 @@ switch ($route) {
         $st = $pdo->prepare('DELETE FROM device_logins WHERE id = ? AND user_id = ?');
         $st->execute([$id, $me['user_id']]);
         json_out(['ok' => $st->rowCount() > 0]);
+
+    case 'pause': // the owner's panic switch: {"paused": true|false}
+        $me = require_client();
+        $on = !empty($in['paused']);
+        kv_set('paused_' . $me['user_id'], $on ? (string) time() : '0');
+        security_alert($on ? 'Jarvis PAUSE kar diya gaya (sab agents ruk gaye)' : 'Jarvis dobara chalu kiya gaya', (int) $me['user_id'], 'pause');
+        json_out(['paused' => $on]);
 
     case 'agent_create':
         $me = require_client();
@@ -953,6 +968,10 @@ switch ($route) {
     // ---------- PC agent side ----------
     case 'agent_poll':
         $agent = require_agent();
+        if (agents_paused((int) $agent['user_id'])) { // pause switch: stay online but hand out nothing
+            $pdo->prepare('UPDATE devices SET last_seen = ? WHERE id = ?')->execute([time(), $agent['id']]);
+            json_out(['commands' => [], 'paused' => true]);
+        }
         // Optional live numbers the agent reports with each poll (0-100).
         $pct = static fn(string $k): ?float => isset($_GET[$k]) && is_numeric($_GET[$k]) ? max(0.0, min(100.0, (float) $_GET[$k])) : null;
         $projects = array_values(array_filter(

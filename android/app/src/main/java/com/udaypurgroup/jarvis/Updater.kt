@@ -20,6 +20,26 @@ import java.security.MessageDigest
 object Updater {
     private const val ACTION = "com.udaypurgroup.jarvis.UPDATE_RESULT"
 
+    /** The owner's release key (deploy/release_tools.py). An update without a valid signature from it is never installed. */
+    private const val PUBLIC_KEY_HEX = "07e992393a882f79180bedd4fabcd31ed2e1cf3bba17fa708fe65c114a4477ee"
+
+    private fun hex(s: String): ByteArray = ByteArray(s.length / 2) { s.substring(it * 2, it * 2 + 2).toInt(16).toByte() }
+
+    /** Ed25519 check of "jarvis-release|android|<versionCode>|<sha256>" (needs Android 13+, which is what the owner's phone runs). */
+    private fun signatureOk(code: Long, sha: String, sigHex: String): Boolean {
+        if (Build.VERSION.SDK_INT < 33 || sigHex.length != 128) return false
+        return try {
+            val spki = hex("302a300506032b6570032100") + hex(PUBLIC_KEY_HEX)
+            val key = java.security.KeyFactory.getInstance("Ed25519").generatePublic(java.security.spec.X509EncodedKeySpec(spki))
+            val sig = java.security.Signature.getInstance("Ed25519")
+            sig.initVerify(key)
+            sig.update("jarvis-release|android|$code|$sha".toByteArray(Charsets.US_ASCII))
+            sig.verify(hex(sigHex))
+        } catch (e: Exception) {
+            false
+        }
+    }
+
     fun currentCode(ctx: Context): Long {
         val info = ctx.packageManager.getPackageInfo(ctx.packageName, 0)
         return if (Build.VERSION.SDK_INT >= 28) info.longVersionCode else @Suppress("DEPRECATION") info.versionCode.toLong()
@@ -34,6 +54,10 @@ object Updater {
         val j = JSONObject(r.body)
         val code = j.optLong("code", 0)
         if (code <= currentCode(ctx)) return
+        if (!signatureOk(code, j.optString("sha256"), j.optString("signature"))) {
+            Prefs.setStatus(ctx, "Update ki signature galat ya nahi hai: install nahi kiya")
+            return
+        }
         if (!ctx.packageManager.canRequestPackageInstalls()) {
             Prefs.setStatus(ctx, "Naya version (${j.optString("name")}) tayyar: Settings me 'Install unknown apps' allow karo")
             Notify.post(ctx, "Jarvis update tayyar", "Jarvis > Settings me 'Auto-update' ko Allow karo, phir app khud update ho jayega.")

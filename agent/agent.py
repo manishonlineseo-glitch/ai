@@ -862,6 +862,9 @@ def run(cfg, stop=None, on_status=None):
                 continue
             r.raise_for_status()
             status("online")
+            if r.json().get("paused") or os.path.exists(os.path.join(DATA_DIR, "paused")):
+                stop.wait(5)  # pause switch (server or tray): stay connected, run nothing
+                continue
             for cmd in r.json().get("commands", []):
                 if cmd["action"] in AI_ACTIONS or cmd["action"] in ("brain_chat", "screen_look", "window_read", "claude_sessions", "web_research", "operate", "call_run", "call_selftest"):
                     try:

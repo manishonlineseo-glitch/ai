@@ -273,6 +273,18 @@ def run_tray():
         except OSError:
             pass
 
+    pause_file = os.path.join(HOME, "paused")
+
+    def toggle_pause(_icon, _item):
+        # local emergency stop: the agent stays connected but runs nothing while this file exists
+        try:
+            if os.path.exists(pause_file):
+                os.remove(pause_file)
+            else:
+                open(pause_file, "w").close()
+        except OSError:
+            pass
+
     def quit_app(_icon, _item):
         stop_agent()
         icon.stop()
@@ -281,6 +293,7 @@ def run_tray():
         pystray.MenuItem(lambda item: "Jarvis: " + STATE_TEXT.get(state["value"], state["value"]), None, enabled=False),
         pystray.MenuItem("Jarvis site kholo", open_site, default=True),
         pystray.MenuItem("Settings (folders)", lambda *_: child("--settings")),
+        pystray.MenuItem("PAUSE: Jarvis ko is PC par roko", toggle_pause, checked=lambda item: os.path.exists(pause_file)),
         pystray.MenuItem("Windows ke saath start", toggle_autostart, checked=lambda item: autostart_enabled()),
         pystray.MenuItem("Band karo", quit_app),
     )
