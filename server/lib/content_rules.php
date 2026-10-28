@@ -170,8 +170,8 @@ function content_check(array $doc): array
     $sentences = content_sentences($body);
     $ns = max(count($sentences), 1);
     $checks = [];
-    $add = function (string $id, string $label, bool $ok, string $value, string $need, bool $hard = true) use (&$checks) {
-        $checks[] = ['id' => $id, 'label' => $label, 'ok' => $ok, 'value' => $value, 'need' => $need, 'hard' => $hard];
+    $add = function (string $id, string $label, bool $ok, string $value, string $need, bool $hard = true, string $hint = '') use (&$checks) {
+        $checks[] = ['id' => $id, 'label' => $label, 'ok' => $ok, 'value' => $value, 'need' => $need, 'hard' => $hard, 'hint' => $hint];
     };
 
     // ---- SEO basics
@@ -183,7 +183,8 @@ function content_check(array $doc): array
             break;
         }
     }
-    $add('kw_first_para', 'Focus keyword in the first paragraph', $kw !== '' && content_count_phrase($firstPara, $kw) > 0, $kw !== '' && content_count_phrase($firstPara, $kw) > 0 ? 'yes' : 'no', 'yes');
+    $add('kw_first_para', 'Focus keyword in the first paragraph', $kw !== '' && content_count_phrase($firstPara, $kw) > 0, $kw !== '' && content_count_phrase($firstPara, $kw) > 0 ? 'yes' : 'no', 'yes', true,
+        'the very FIRST paragraph of the body must contain the exact phrase "' . $kw . '" (a one-line hook counts as the first paragraph, so put the phrase in the hook or open with a normal paragraph)');
     $tl = mb_strlen($title);
     $add('title_len', 'SEO title 50-60 characters', $tl >= 50 && $tl <= 60, (string) $tl, '50-60');
     $add('title_kw', 'Focus keyword in the SEO title', $kw !== '' && content_count_phrase($title, $kw) > 0, content_count_phrase($title, $kw) > 0 ? 'yes' : 'no', 'yes');
@@ -197,7 +198,10 @@ function content_check(array $doc): array
     $add('word_target', 'Practical target 800-1200 words (1500+ for detailed topics)', $wc >= 800, (string) $wc, '800+', false);
 
     $density = ($kw !== '' && $wc > 0) ? content_count_phrase($plain . ' ' . implode(' ', array_column(array_filter($blocks, fn($b) => $b['type'] === 'heading'), 'text')), $kw) * max(count($kwWords), 1) / $wc * 100 : 0.0;
-    $add('density', 'Keyword density 1-2%', $density >= 1.0 && $density <= 2.0, number_format($density, 2) . '%', '1-2%');
+    $kwNow = $kw !== '' ? content_count_phrase($plain . ' ' . implode(' ', array_column(array_filter($blocks, fn($b) => $b['type'] === 'heading'), 'text')), $kw) : 0;
+    $perPct = max($wc, 1) / 100 / max(count($kwWords), 1);
+    $add('density', 'Keyword density 1-2%', $density >= 1.0 && $density <= 2.0, number_format($density, 2) . '%', '1-2%', true,
+        'the exact phrase appears ' . $kwNow . ' times in ' . $wc . ' words; it should appear ' . (int) ceil(1.2 * $perPct) . ' to ' . max((int) floor(1.9 * $perPct), 1) . ' times');
 
     preg_match_all('/!\[([^\]]*)\]\(([^)]*)\)/u', $body, $imgs, PREG_SET_ORDER);
     $altOk = false;
@@ -257,11 +261,15 @@ function content_check(array $doc): array
 
     // ---- readability
     $trans = count(array_filter($sentences, 'content_has_transition'));
-    $add('transitions', 'Transition words in at least 30% of sentences', $trans / $ns >= 0.30, number_format($trans / $ns * 100, 1) . '%', '30%+');
+    $needTrans = (int) ceil(0.30 * $ns) - $trans;
+    $add('transitions', 'Transition words in at least 30% of sentences', $trans / $ns >= 0.30, number_format($trans / $ns * 100, 1) . '%', '30%+', true,
+        'add a connector (so, but, because, then, that is why, for example, if) to at least ' . max($needTrans, 1) . ' more sentences, there are ' . $ns . ' sentences in all');
     $longS = count(array_filter($sentences, fn($s) => count(content_words($s)) > 20));
-    $add('sentence_len', 'No more than 25% of sentences over 20 words', $longS / $ns <= 0.25, number_format($longS / $ns * 100, 1) . '%', '25% max');
+    $add('sentence_len', 'No more than 25% of sentences over 20 words', $longS / $ns <= 0.25, number_format($longS / $ns * 100, 1) . '%', '25% max', true,
+        'split or shorten at least ' . max($longS - (int) floor(0.25 * $ns), 1) . ' of the ' . $longS . ' sentences that are over 20 words');
     $passive = count(array_filter($sentences, 'content_is_passive'));
-    $add('passive', 'Passive voice in under 10% of sentences', $passive / $ns < 0.10, number_format($passive / $ns * 100, 1) . '%', 'under 10%');
+    $add('passive', 'Passive voice in under 10% of sentences', $passive / $ns < 0.10, number_format($passive / $ns * 100, 1) . '%', 'under 10%', true,
+        'rewrite at least ' . max($passive - (int) ceil(0.10 * $ns) + 1, 1) . ' of the ' . $passive . ' passive sentences in active voice');
     $flesch = content_flesch($body);
     $deva = content_devanagari_share($plain) > 0.3;
     $add('flesch', 'Flesch reading ease 60+', $flesch !== null && ($deva || $flesch >= 60), $flesch === null ? 'n/a' : number_format($flesch, 1) . ($deva ? ' (Hindi text: not meaningful)' : ''), '60+', !$deva);
@@ -301,7 +309,7 @@ function content_check(array $doc): array
     $failed = [];
     foreach ($checks as $c) {
         if (!$c['ok'] && $c['hard']) {
-            $hint = '';
+            $hint = $c['hint'] !== '' ? '; ' . $c['hint'] : '';
             if (in_array($c['id'], ['title_len', 'meta_len'], true) && ctype_digit($c['value'])) {
                 [$lo, $hi] = $c['id'] === 'title_len' ? [50, 60] : [120, 155];
                 $hint = (int) $c['value'] < $lo ? '; add at least ' . ($lo - (int) $c['value']) . ' characters' : '; cut at least ' . ((int) $c['value'] - $hi) . ' characters';
@@ -388,7 +396,7 @@ function content_write(int $userId, string $brief, ?callable $generate = null, i
         . "OWNER RULES (follow all of them):\n" . $rules . "\n\n" . content_human_rules() . "\n"
         . "OUTPUT FORMAT (exactly, nothing else):\nFOCUS_KEYWORD: <the focus keyphrase, 1-4 words>\nSEO_TITLE: <50-60 characters, starts with or contains the keyphrase>\n"
         . "META_DESCRIPTION: <120-155 characters, contains the keyphrase, makes people want to click>\nSLUG: <lowercase-words-with-hyphens containing the keyphrase>\n---\n"
-        . "<the article in Markdown: a short hook line first, the keyphrase inside the FIRST paragraph, H2/H3 subheadings (a new one at least every 250 words, the keyphrase in one or two of them), "
+        . "<the article in Markdown: a short hook line first (the hook counts as the FIRST paragraph, so the exact keyphrase must be inside it, or skip the hook and open with a normal paragraph that contains it), H2/H3 subheadings (a new one at least every 250 words, the keyphrase in one or two of them), "
         . "short paragraphs, at least 2 internal links like [text](/some-page) using the INTERNAL PAGES from the brief or sensible relative paths, one credible outbound link if it helps, "
         . "one image line ![alt text with the keyphrase](/images/name.jpg), and a closing question or call to action>\n\n"
         . "Keyphrase density must land between 1% and 2% of all words. Length: 900-1200 words unless the BRIEF says otherwise (never under 300).\n"

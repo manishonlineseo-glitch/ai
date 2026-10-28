@@ -279,6 +279,14 @@ class T35_ParsingAndWriterLoop(unittest.TestCase):
         self.assertRegex(text, r"SEO title 50-60 characters: now 36, need 50-60; add at least 14 characters")
         self.assertRegex(text, r"Meta description 120-155 characters: now \d+, need 120-155; cut at least \d+ characters")
 
+    def test_failures_come_with_exact_counts_so_the_model_knows_how_much_to_fix(self):
+        flat = "The shop is open. The card is blue. The phone is on the desk. The bank is far away. The clerk sits there. " * 10
+        r = check(body="Card declined.\n\n## Heading\n\n" + flat + "\n\nThat is all.")
+        text = " | ".join(r["failed"])
+        self.assertIn("the very FIRST paragraph of the body must contain the exact phrase \"payment failed\"", text)
+        self.assertRegex(text, r"add a connector \(so, but, because.*\) to at least \d+ more sentences, there are \d+ sentences in all")
+        self.assertRegex(text, r"the exact phrase appears 0 times in \d+ words; it should appear \d+ to \d+ times")
+
     def test_header_lines_the_model_leaves_out_of_a_fix_keep_their_old_values(self):
         bad = {**GOOD, "seo_title": "Payment failed fixes for small shops"}
         title_only_reply = "SEO_TITLE: " + GOOD["seo_title"] + "\n---\n" + GOOD_BODY
