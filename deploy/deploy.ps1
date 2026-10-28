@@ -12,7 +12,7 @@ $cmd = 'cd ~/jarvis_repo 2>/dev/null || git clone --quiet https://github.com/man
 ssh -i $key -p 65002 -o BatchMode=yes u204605465@91.108.107.206 $cmd
 if ($LASTEXITCODE -ne 0) { throw 'server update failed' }
 # The owner's content rules are private business text: not in git (public repo), copied straight to the live site.
-$rules = Join-Path $repo 'server\contentules.md'
+$rules = Join-Path (Join-Path (Join-Path $repo 'server') 'content') 'rules.md'
 if (Test-Path $rules) {
     scp -i $key -P 65002 -o BatchMode=yes $rules "u204605465@91.108.107.206:domains/udaypurgroup.in/public_html/ai/content/rules.md"
     if ($LASTEXITCODE -ne 0) { throw 'copying content rules failed' }
