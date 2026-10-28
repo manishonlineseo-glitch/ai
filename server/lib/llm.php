@@ -36,6 +36,8 @@ function gemini_call(string $model, array $body, int $timeout): string
     if ($until > time()) {
         throw new RuntimeException($model . ': quota khatam, ' . round(($until - time()) / 3600, 1) . ' ghante baad wapas');
     }
+    // "Thinking" off: measured from this server, gemini-3.5-flash answered a chat plan in 14 s with it on and 1.8 s with budget 0.
+    $body['generationConfig']['thinkingConfig'] ??= ['thinkingBudget' => 0];
     [$code, $j, $err] = llm_http(
         'https://generativelanguage.googleapis.com/v1beta/models/' . rawurlencode($model) . ':generateContent',
         ['x-goog-api-key: ' . (string) cfg('gemini_api_key')],
@@ -85,7 +87,7 @@ function gemini_generate(string $prompt): string
             return gemini_call((string) $m, [
                 'contents'         => [['role' => 'user', 'parts' => [['text' => $prompt]]]],
                 'generationConfig' => ['responseMimeType' => 'application/json', 'temperature' => 0.3],
-            ], $i === 0 ? 12 : 25);
+            ], $i === 0 ? 10 : 15);
         } catch (RuntimeException $e) {
             $last .= ($last ? ' | ' : '') . $e->getMessage();
         }

@@ -982,7 +982,7 @@ switch ($route) {
             if ($rows || time() >= $until) {
                 break;
             }
-            usleep(150000); // a command queued from the phone reaches the PC in ~0.15 s, not up to 1 s
+            usleep(50000); // a command queued from the phone reaches the PC within ~50 ms of the next check, not up to 1 s
         } while (true);
         if ($wait > 0) { // heartbeat at the end of the wait too, so the PC never looks offline between polls
             $pdo->prepare('UPDATE devices SET last_seen = ? WHERE id = ?')->execute([time(), $agent['id']]);

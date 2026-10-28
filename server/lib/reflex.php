@@ -52,8 +52,8 @@ function reflex_match(int $userId, string $text): ?array
     $phone = brain_phone_agent($userId, $t);
 
     // "youtube par <song> chala" / "play <song> on youtube"
-    if (preg_match('/\b(chala|chalao|chalado|chala do|play|bajao|bajado|laga do|lagao)\b/u', $t) && preg_match('/youtube|\bsong\b|gaana|gana/u', $t)) {
-        $q = preg_replace('/\b(youtube|yt|par|pe|per|me|mein|mai|on|ka|ki|ke|mobile|phone|laptop|pc|computer|chalao|chala|chalado|do|play|karo|kar|bajao|bajado|laga|lagao|song|gaana|gana|ye|yeh|ek|mujhe|mere liye|please|plz|jarvis|ko|the)\b/u', ' ', $t) ?? '';
+    if (preg_match('/\b(chala|chalao|chalado|chala do|play|bajao|bajado|baja do|baja de|baja dena|baja|laga do|lagao)\b/u', $t) && preg_match('/youtube|\bsong\b|gaana|gana/u', $t)) {
+        $q = preg_replace('/\b(youtube|yt|par|pe|per|me|mein|mai|on|ka|ki|ke|mobile|phone|laptop|pc|computer|mere|baja|dena|do|de|chalao|chala|chalado|do|play|karo|kar|bajao|bajado|laga|lagao|song|gaana|gana|ye|yeh|ek|mujhe|mere liye|please|plz|jarvis|ko|the)\b/u', ' ', $t) ?? '';
         $q = trim(preg_replace('/\s+/u', ' ', $q) ?? '');
         if (mb_strlen($q) >= 2) {
             if ($target === 'pc' && $pcName) { // spoken to / about the laptop: open the YouTube results there
@@ -98,6 +98,35 @@ function reflex_match(int $userId, string $text): ?array
             'actions' => [['tool' => 'pc_command', 'input' => ['device' => $pcName, 'action' => 'claude_sessions', 'hours' => $hours]]]];
     }
 
+    // "laptop ki awaaz badhao / kam karo / mute": the keyboard's volume keys, instant
+    if (preg_match('/awaaz|awaz|volume|sound|आवाज|वॉल्यूम|mute|म्यूट/u', $t) && $pcName && !preg_match('/\b(mobile|phone|android|fone)\b|फोन|मोबाइल/u', $t)) {
+        $dir = preg_match('/mute|म्यूट|band|बंद|chup/u', $t) ? 'mute' : (preg_match('/badha|bada|zyada|jyada|tez|up|increase|high|बढ़ा|बढा|ज्यादा|तेज/u', $t) ? 'up' : (preg_match('/kam|ghata|down|low|decrease|कम|घटा|धीमा/u', $t) ? 'down' : ''));
+        if ($dir !== '') {
+            return ['reply' => ['up' => 'Awaaz badha raha hoon.', 'down' => 'Awaaz kam kar raha hoon.', 'mute' => 'Awaaz mute/unmute kar raha hoon.'][$dir],
+                'actions' => [['tool' => 'pc_command', 'input' => ['device' => $pcName, 'action' => 'volume', 'direction' => $dir, 'steps' => 5]]]];
+        }
+    }
+
+    // "chrome band karo": closes the program's windows politely; the owner taps Approve first (closing can lose unsaved work)
+    if ($pcName && preg_match('/^(?:laptop (?:ka |ki |ke |me |mein |par |pe )?)?(chrome|edge|notepad|calculator|paint|word|excel|vs ?code) (?:ko )?(?:band|close)(?: kar(?:o| do)?| kro)?$/u', $t, $m)) {
+        $app = str_replace(' ', '', $m[1]) === 'vscode' ? 'vscode' : $m[1];
+        return ['reply' => ucfirst($app) . ' band karne ke liye aapki Approve chahiye (kuch save na ho to data ja sakta hai).',
+            'actions' => [['tool' => 'pc_command', 'input' => ['device' => $pcName, 'action' => 'close_app', 'app' => $app]]]];
+    }
+
+    // "google par <kuch> search karo" / "<jagah> ka rasta" / "youtube par <kuch> search karo": search pages open by rule
+    if ($q = reflex_search($t)) {
+        $host = brain_phone_agent($userId, $t);
+        if ($target === 'phone' && $host) {
+            return ['reply' => $q['label'] . ' phone par khol raha hoon.',
+                'actions' => [['tool' => 'pc_command', 'input' => ['device' => $host, 'action' => 'phone_open_url', 'url' => $q['url']]]]];
+        }
+        if ($pcName) {
+            return ['reply' => $q['label'] . ' laptop par khol raha hoon.',
+                'actions' => [['tool' => 'pc_command', 'input' => ['device' => $pcName, 'action' => 'open_url', 'url' => $q['url']]]]];
+        }
+    }
+
     // "<contact> ko call karo" / "call <contact>" (only for a name that is in the allowed contacts)
     if (preg_match('/^(?:please )?(.+?) ko (?:call|phone|fone) ?(?:karo|kar do|lagao|laga do)?$|^call (?:karo )?(.+)$/u', $t, $m)) {
         $name = trim($m[1] !== '' ? $m[1] : ($m[2] ?? ''));
@@ -114,6 +143,28 @@ function reflex_match(int $userId, string $text): ?array
 }
 
 /** Short "open <app or site>" commands (Hinglish, English or Devanagari). Returns ['label', 'cmd'] or null. */
+/** "google par X search karo", "X ka rasta/map", "youtube par X search karo" -> ['label', 'url'] (null if it is not a plain search). */
+function reflex_search(string $t): ?array
+{
+    if (mb_strlen($t) > 140 || !preg_match('/\b(search|dhundo|dhoondo|dhundh|khojo|rasta|route|direction|directions|map|maps|navigate)\b|सर्च|ढूंढो|खोजो|रास्ता/u', $t)) {
+        return null;
+    }
+    $isMap = (bool) preg_match('/\b(rasta|route|direction|directions|map|maps|navigate)\b|रास्ता/u', $t);
+    $isYt = (bool) preg_match('/youtube|यूट्यूब|\byt\b/u', $t);
+    $q = preg_replace('/(^|\s)(search|dhundo|dhoondo|dhundh|khojo|rasta|route|direction|directions|map|maps|navigate|google|gugal|youtube|yt|par|pe|per|me|mein|mai|ka|ki|ke|ko|karo|kar|kro|do|de|batao|dikhao|laptop|pc|computer|mobile|phone|the|for|please|plz|jarvis|ye|yeh|ek|mujhe|chrome|browser|kholo|khol|open|aur|and|then|phir|fir|सर्च|ढूंढो|खोजो|रास्ता|गूगल|यूट्यूब|पर|का|की|के|को|करो|कर|दो|में|मे|लैपटॉप|फोन|मोबाइल)(?=\s|$)/u', ' ', $t) ?? '';
+    $q = trim(preg_replace('/\s+/u', ' ', $q) ?? '');
+    if (mb_strlen($q) < 2 || mb_strlen($q) > 100) {
+        return null;
+    }
+    if ($isMap) {
+        return ['label' => 'Maps me "' . $q . '"', 'url' => 'https://www.google.com/maps/search/' . rawurlencode($q)];
+    }
+    if ($isYt) {
+        return ['label' => 'YouTube par "' . $q . '"', 'url' => 'https://www.youtube.com/results?search_query=' . rawurlencode($q)];
+    }
+    return ['label' => 'Google par "' . $q . '"', 'url' => 'https://www.google.com/search?q=' . rawurlencode($q)];
+}
+
 /** 'pc' or 'phone': the device the words name ("laptop par ...", "mobile me ..."), else the one the owner is speaking from. */
 function reflex_target(string $t): ?string
 {

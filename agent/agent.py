@@ -32,8 +32,9 @@ ENGINES = ("claude", "gemini", "codex")
 AI_ACTIONS = {f"{e}_{m}" for e in ENGINES for m in ("read", "work")}
 ALL_ACTIONS = {"cpu_status", "speak", "open_url", "open_app", "lock", "shutdown", "restart", "cancel_shutdown",
                "brain_chat", "screen_look", "claude_sessions", "window_read", "web_research",
-               "chrome_profiles", "ui_control", "vault_ask", "vault_fill", "vault_sites", "operate", "call_run", "call_selftest"} | AI_ACTIONS
-NEWER_ACTIONS = {"chrome_profiles", "ui_control", "vault_ask", "vault_fill", "vault_sites", "operate", "call_run", "call_selftest"}  # added in 1.1: an older config.json gets them too
+               "chrome_profiles", "ui_control", "vault_ask", "vault_fill", "vault_sites", "operate", "call_run", "call_selftest",
+               "volume", "close_app"} | AI_ACTIONS
+NEWER_ACTIONS = {"chrome_profiles", "ui_control", "vault_ask", "vault_fill", "vault_sites", "operate", "call_run", "call_selftest", "volume", "close_app"}  # added in 1.1: an older config.json gets them too
 STATE_PATH = os.path.join(DATA_DIR, "state.json")
 
 # Headless AI coding CLIs. Override any key under "claude" / "gemini" / "codex" in config.json.
@@ -99,10 +100,10 @@ def relogin(cfg, session, base_url):
         pw = ops._dpapi(base64.b64decode(login["password"]), False).decode("utf-8")
         r = requests.post(base_url + "agent_login", json={"username": login["username"], "password": pw}, timeout=30,
                           headers={"X-Requested-With": "jarvis", "User-Agent": "JarvisAgent/1.0"})
+    except requests.RequestException:  # first: a network error is an OSError too, and must not be taken for a wrong password
+        return "down"
     except (KeyError, ValueError, OSError):
         return "bad"
-    except requests.RequestException:
-        return "down"
     if r.status_code == 200 and "token" in r.json():
         cfg["token"] = r.json()["token"]
         session.headers["X-Agent-Token"] = cfg["token"]
@@ -664,6 +665,10 @@ def run_action(cfg, action, args):
                 raise ValueError("sirf http/https allowed")
             return ops.open_url_profile(str(args.get("url", "")), profile)
         return open_url(str(args.get("url", "")))
+    if action == "volume":
+        return set_volume(str(args.get("direction", "")), int(args.get("steps") or 5))
+    if action == "close_app":
+        return close_app(str(args.get("app", "")))
     if action == "open_app":
         name = str(args.get("app", ""))
         if name.lower() == "chrome" and not cfg["apps"].get("chrome"):
@@ -697,6 +702,27 @@ BUILTIN_APPS = {  # everyday apps work without editing config.json; an entry in 
     "chrome": "chrome.exe", "edge": "msedge.exe", "notepad": "notepad.exe", "calculator": "calc.exe", "explorer": "explorer.exe",
     "paint": "mspaint.exe", "cmd": "cmd.exe", "word": "winword.exe", "excel": "excel.exe", "vscode": "Code.exe",
 }
+
+
+def set_volume(direction, steps=5):
+    """Volume keys, exactly like the keyboard's: each press is 2 %. direction = up | down | mute."""
+    keys = {"up": 0xAF, "down": 0xAE, "mute": 0xAD}
+    vk = keys.get(direction)
+    if vk is None or sys.platform != "win32":
+        raise ValueError("direction up, down ya mute hona chahiye")
+    for _ in range(1 if direction == "mute" else max(1, min(steps, 50))):
+        ctypes.windll.user32.keybd_event(vk, 0, 0, 0)
+        ctypes.windll.user32.keybd_event(vk, 0, 2, 0)
+    return {"up": "awaaz badhayi", "down": "awaaz kam ki", "mute": "mute/unmute kiya"}[direction]
+
+
+def close_app(name):
+    """Politely close a program's windows (like the X button; unsaved work still gets its 'save?' question). No force kill."""
+    exe = BUILTIN_APPS.get(name.strip().lower())
+    if not exe:
+        raise LookupError(f"'{name}' band karne ki list me nahi hai (chrome, edge, notepad, calculator, paint, word, excel, vscode)")
+    out = subprocess.run(["taskkill", "/IM", exe], capture_output=True, text=True, timeout=20)
+    return (out.stdout or out.stderr).strip()[:200] or "band karne ko bola"
 
 
 def find_start_menu_app(name):
@@ -795,6 +821,7 @@ def run(cfg, stop=None, on_status=None):
     threading.Thread(target=make_worker(ai_queue), daemon=True).start()
     threading.Thread(target=make_worker(brain_queue), daemon=True).start()
 
+    bad_logins = 0
     while not stop.is_set():
         try:
             params = {"cpu": psutil.cpu_percent(interval=None), "ram": psutil.virtual_memory().percent,
@@ -808,11 +835,20 @@ def run(cfg, stop=None, on_status=None):
                 if cfg.get("login"):  # token gone (password changed, session replaced...): sign in again by itself
                     outcome = relogin(cfg, s, cfg["server_url"] + "api.php?r=")
                     if outcome == "ok":
+                        bad_logins = 0
                         print("Dobara login ho gaya.", flush=True)
                         continue
                     status("rejected")
-                    print("Login nahi ho paya (password badla hai?)." if outcome == "bad" else "Server nahi mil raha.", "60 second baad dobara koshish.", flush=True)
-                    stop.wait(60)
+                    if outcome == "bad":
+                        # A wrong password counts against this network's login attempts on the server (8 in 15 min locks everyone out,
+                        # the owner's browser too), so back off hard: 1 min, 10 min, then once an hour.
+                        bad_logins += 1
+                        wait = (60, 600)[bad_logins - 1] if bad_logins <= 2 else 3600
+                        print(f"Login nahi ho paya (password badla hai?). {wait // 60} minute baad dobara. Tray > Settings me naya password daalo.", flush=True)
+                    else:
+                        wait = 60
+                        print("Server nahi mil raha. 60 second baad dobara koshish.", flush=True)
+                    stop.wait(wait)
                     continue
                 status("rejected")
                 print("Server ne token reject kiya (block ya delete hua?). 20 second baad dobara koshish.", flush=True)

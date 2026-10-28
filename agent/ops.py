@@ -14,7 +14,7 @@ import threading
 import time
 from ctypes import wintypes
 
-VERSION = "1.2.3"
+VERSION = "1.2.4"
 
 HOME = os.environ.get("JARVIS_AGENT_HOME") or os.path.dirname(os.path.abspath(__file__))
 VAULT_PATH = os.path.join(HOME, "vault.bin")

@@ -1,0 +1,24 @@
+{
+  "date": "2026-10-28T14:18:04+05:30",
+  "suites": {
+    "server_test": {
+      "tests": 49,
+      "subchecks": 33,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "ok": true
+    },
+    "agent_test": {
+      "tests": 33,
+      "subchecks": 0,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "ok": true
+    }
+  },
+  "total_tests": 82,
+  "total_subchecks": 33,
+  "all_ok": true
+}

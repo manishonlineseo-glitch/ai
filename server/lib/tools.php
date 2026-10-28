@@ -6,7 +6,7 @@ const PC_ACTIONS = [
     'cpu_status', 'speak', 'open_url', 'open_app', 'lock', 'shutdown', 'restart', 'cancel_shutdown',
     'claude_read', 'claude_work', 'gemini_read', 'gemini_work', 'codex_read', 'codex_work',
     'screen_look', 'claude_sessions', 'window_read', 'web_research', 'chrome_profiles',
-    'ui_control', 'vault_ask', 'vault_fill', 'vault_sites', 'operate', 'call_run', 'call_selftest',
+    'ui_control', 'vault_ask', 'vault_fill', 'vault_sites', 'operate', 'call_run', 'call_selftest', 'volume', 'close_app',
     // run on the Android app (a device of type android), not on a PC
     'phone_status', 'phone_notify', 'phone_open_url', 'phone_youtube_play', 'phone_call', 'phone_scan_files', 'phone_trash_files',
 ];
@@ -15,7 +15,7 @@ const PHONE_AGENT_ACTIONS = ['phone_status', 'phone_notify', 'phone_open_url', '
 
 /** Small, reversible things run on their own; anything that edits files or powers off a PC waits for a tap. */
 const DEFAULT_AUTO_ACTIONS = [
-    'cpu_status', 'speak', 'open_app', 'lock', 'cancel_shutdown', 'claude_read', 'gemini_read', 'codex_read',
+    'cpu_status', 'speak', 'open_app', 'volume', 'lock', 'cancel_shutdown', 'claude_read', 'gemini_read', 'codex_read',
     'screen_look', // the owner chose "no approval": the screenshot goes to their own AI login and is never stored
     'claude_sessions', // reads the laptop's own Claude Code session records, no AI involved
     'window_read', // copies a window's text (no screenshot) and has the owner's own AI explain it
@@ -99,6 +99,18 @@ function clean_pc_args(string $action, array $in): array
                 throw new InvalidArgumentException('profile "Default" ya "Profile 12" jaisa hona chahiye');
             }
             return $profile !== '' ? ['url' => $url, 'profile' => $profile] : ['url' => $url];
+        case 'volume':
+            $dir = (string) ($in['direction'] ?? '');
+            if (!in_array($dir, ['up', 'down', 'mute'], true)) {
+                throw new InvalidArgumentException('direction up, down ya mute');
+            }
+            return ['direction' => $dir, 'steps' => min(max((int) ($in['steps'] ?? 5), 1), 50)];
+        case 'close_app':
+            $app = strtolower(trim((string) ($in['app'] ?? '')));
+            if (!preg_match('/^[a-z0-9 _.\-]{1,40}$/', $app)) {
+                throw new InvalidArgumentException('app ka naam galat hai');
+            }
+            return ['app' => $app];
         case 'open_app':
             $app = trim((string) ($in['app'] ?? ''));
             if (!preg_match('/^[A-Za-z0-9 _.\-]{1,40}$/', $app)) {
@@ -447,6 +459,7 @@ function claude_tools(): array
              'older_than_days' => ['type' => 'integer', 'description' => 'For phone_scan_files/phone_trash_files: only screenshots older than this (default 30)'],
              'query'    => ['type' => 'string', 'description' => 'For phone_youtube_play: song/video to search and play'],
              'contact'  => ['type' => 'string', 'description' => 'For phone_call: contact name from the allowed list'],
+             'direction' => ['type' => 'string', 'description' => 'For volume: up, down or mute (action volume changes the laptop sound; close_app closes a program by name, needs approval)'],
              'hours'    => ['type' => 'integer', 'description' => 'For claude_sessions: how many past hours to include (default 24)'],
              'question' => ['type' => 'string', 'description' => 'For screen_look: what to find out from the screenshot (optional)'],
              'window'   => ['type' => 'string', 'description' => 'For screen_look/window_read: part of a window title (e.g. "Claude") to bring to the front before the screenshot (optional)'],
