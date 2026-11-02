@@ -169,3 +169,5 @@ android/.kotlin/
 docs/SECURITY_PRIVATE.md
 server/content/rules.md
 server/content/*.md
+server/data/library/
+server/data/*.log
