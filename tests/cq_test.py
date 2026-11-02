@@ -445,7 +445,7 @@ class T67_GrammarProvider(unittest.TestCase):
         tid = make_article()
         p = gates(tid)["providers"]
         self.assertIn("CONFIGURATION REQUIRED", p["ai_detection"]["state"])
-        self.assertIn("CONFIGURATION REQUIRED", p["plagiarism"]["state"])
+        self.assertIn("UNAVAILABLE", p["plagiarism"]["state"])
         self.assertIn("Hindi/Hinglish: nahi", p["grammar"]["languages"])
 
 

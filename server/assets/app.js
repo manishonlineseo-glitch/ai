@@ -1045,6 +1045,31 @@ function gateChip(status) {
   return h('span', { class: 'tag ' + (status === 'PASS' || status === 'APPROVED' ? 'accent' : status === 'FAIL' || status === 'REJECTED' ? 'bad' : 'warn') }, status);
 }
 
+function providerSettings() {
+  const box = h('div', { class: 'card' });
+  const msg = h('div', { class: 'muted', role: 'status' });
+  const keyInput = h('input', { type: 'password', autocomplete: 'off', maxlength: 32, placeholder: 'Sapling API key (32 akshar)', 'aria-label': 'Sapling API key' });
+  async function load() {
+    const j = await api('content_provider');
+    const p = j.providers;
+    put(box,
+      h('p', { class: 'muted' }, 'AI detection aur plagiarism ke asli providers. Har state asli jawab ke baad hi "CONNECTED & VERIFIED" hoti hai.'),
+      Object.entries(p).map(([k, v]) => h('div', { class: 'item' }, h('div', { class: 'grow' }, h('b', null, v.name), h('div', { class: 'muted' }, v.state), h('div', { class: 'muted' }, 'Bhashayen: ' + v.languages), v.note ? h('div', { class: 'muted' }, v.note) : null))),
+      h('h2', null, 'Sapling AI Detector key'),
+      h('p', { class: 'muted' }, 'sapling.ai par apna account bana kar free key lo (roz 50,000 akshar free). Key sirf server par (web root ke bahar) rehti hai, wapas kabhi nahi dikhti. Article ka text sirf tab jata hai jab "Bahari provider allow karo" on ho, aur zero_retention ke saath.'),
+      h('div', { class: 'row wrap' }, keyInput,
+        h('button', { onclick: async () => { msg.textContent = ''; try { await api('content_provider_key', { provider: 'sapling', key: keyInput.value }); keyInput.value = ''; msg.textContent = 'Key save ho gayi. Ab "Test connection" dabao.'; load(); } catch (x) { msg.textContent = x.message; } } }, 'Key save karo'),
+        h('button', { class: 'ghost', onclick: async () => { msg.textContent = 'Asli request ja rahi hai...'; try { const r = await api('content_provider_test', { provider: 'sapling' }); msg.textContent = r.message; load(); } catch (x) { msg.textContent = x.message; } } }, 'Test connection'),
+        j.sapling.configured && !j.sapling.from_config ? h('button', { class: 'ghost danger', onclick: async () => { if (confirm('Key hata dein?')) { await api('content_provider_key', { provider: 'sapling', key: '' }); load(); } } }, 'Key hatao') : null),
+      j.sapling.configured ? h('p', { class: 'muted' }, 'Key set hai (' + j.sapling.key_hint + ')' + (j.sapling.from_config ? ' · server config se' : '')) : null,
+      msg,
+      h('h2', null, 'Plagiarism ke liye aage kya'),
+      h('p', { class: 'muted' }, 'Ab tak koi plagiarism API aisa nahi mila jiska documentation poora verify ho aur jo is server par seedha chale. Copyleaks ka plagiarism scan sirf webhook se natija deta hai (public HTTPS address chahiye) aur uske credits paid hain. Tab tak aap apne checker ka asli natija "Plagiarism ka asli result daalo" me daalte ho.'));
+  }
+  load().catch((x) => put(box, h('p', { class: 'error' }, x.message)));
+  return box;
+}
+
 function qualityDashboard() {
   const box = h('div', { class: 'card' });
   api('content_quality').then((d) => {
@@ -1068,8 +1093,10 @@ function renderGate(taskId) {
     const g = j.gates, doc = j.version.doc, viewing = j.version.version;
     const run = async (fn) => { msg.textContent = ''; try { await fn(); await load(); } catch (x) { msg.textContent = x.message; await load().catch(() => {}); } };
     const info = (name) => { const x = g.gates[name]; return x.provider ? x.provider + (x.kind === 'manual' ? ' (aapne daala)' : ' (provider)') + (x.score != null ? ' · ' + x.score : '') + (x.note ? ' · ' + x.note : '') : x.note; };
-    const row = (name, ...controls) => h('div', { class: 'item' }, gateChip(g.gates[name].status),
-      h('div', { class: 'grow' }, GATE_LABELS[name], h('div', { class: 'muted' }, info(name))), ...controls);
+    const row = (name, ...controls) => h('div', null, h('div', { class: 'item' }, gateChip(g.gates[name].status),
+      h('div', { class: 'grow' }, GATE_LABELS[name], h('div', { class: 'muted' }, info(name))), ...controls),
+      g.gates[name].results.length > 1 || (g.gates[name].results[0] && g.gates[name].results[0].status === 'NOT VERIFIED')
+        ? g.gates[name].results.map((r) => h('div', { class: 'muted', style: 'margin-left:18px' }, '• ' + r.provider + (r.kind === 'manual' ? ' (aapne daala)' : ' (provider)') + ' · ' + (r.score != null ? r.score : '-') + ' · ' + r.status + (r.note ? ' · ' + r.note : ''))) : null);
 
     const f = {
       aiProv: h('input', { placeholder: 'Detector ka naam (ZeroGPT...)', maxlength: 60 }), aiScore: h('input', { type: 'number', min: 0, max: 100, step: '0.1', placeholder: 'AI %' }),
@@ -1100,7 +1127,7 @@ function renderGate(taskId) {
       row('grammar', h('button', { class: 'ghost small', onclick: () => run(() => api('content_grammar_run', { id: taskId })) }, 'LanguageTool se check'),
         h('button', { class: 'ghost small', onclick: () => run(() => api('content_grammar_run', { id: taskId, auto_fix: true })) }, 'Check + auto sudhaar')),
       h('div', { class: 'row wrap' }, f.grProv, f.grScore, h('button', { class: 'ghost small', onclick: () => run(() => api('content_evidence', { id: taskId, type: 'grammar', provider: f.grProv.value, score: f.grScore.value })) }, 'Apna grammar result daalo')),
-      row('ai_detection'),
+      row('ai_detection', h('button', { class: 'ghost small', onclick: () => run(() => api('content_ai_run', { id: taskId })) }, 'Sapling se AI check')),
       h('div', { class: 'row wrap' }, f.aiProv, f.aiScore, h('div', { class: 'row' }, f.aiLang, h('label', { for: 'ailang' + taskId }, 'Tool ne is bhasha ko support kiya')),
         h('button', { class: 'ghost small', onclick: () => run(() => api('content_evidence', { id: taskId, type: 'ai_detection', provider: f.aiProv.value, score: f.aiScore.value, language_supported: f.aiLang.checked })) }, 'AI detector ka asli result daalo')),
       row('plagiarism'),
@@ -1505,6 +1532,7 @@ function viewContent(view) {
   page(view,
     h('h2', null, 'Naya content likhwao'), h('div', { class: 'card' }, newForm),
     h('h2', null, 'Content Quality Center'), qualityDashboard(),
+    h('h2', null, 'Provider Settings (AI detection, plagiarism)'), providerSettings(),
     h('h2', null, 'Mere content'), listBox, detailBox,
     h('h2', null, 'Apna text check karo'), h('div', { class: 'card' }, ownForm, ownOut),
     h('h2', null, 'Content rules (aapki file)'), rulesCard);

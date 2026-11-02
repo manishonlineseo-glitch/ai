@@ -904,6 +904,41 @@ switch ($route) {
             fail($e->getMessage());
         }
 
+    case 'content_ai_run':
+        $me = require_client();
+        $task = cq_task_or_fail((int) $me['user_id'], (int) ($in['id'] ?? 0));
+        @set_time_limit(90);
+        $cur = cq_version_get($task['id']);
+        try {
+            json_out(cq_ai_detect_run((int) $me['user_id'], $task['id'], (int) ($cur['version'] ?? 0)));
+        } catch (InvalidArgumentException $e) {
+            fail($e->getMessage());
+        }
+
+    case 'content_provider': // Provider Settings: honest state of every provider; keys are never sent back
+        $me = require_client();
+        $k = cq_provider_key('sapling');
+        json_out(['providers' => cq_provider_states((int) $me['user_id']), 'sapling' => ['configured' => $k !== '', 'key_hint' => $k !== '' ? '…' . substr($k, -4) : '', 'from_config' => (string) cfg('sapling_api_key') !== '',
+            'verified_at' => cq_provider_verified_at('sapling')], 'consent' => cq_consent((int) $me['user_id'])]);
+
+    case 'content_provider_key':
+        $me = require_client();
+        try {
+            cq_provider_key_save((string) ($in['provider'] ?? ''), trim((string) ($in['key'] ?? '')));
+        } catch (InvalidArgumentException | RuntimeException $e) {
+            fail($e->getMessage());
+        }
+        security_alert(trim((string) ($in['key'] ?? '')) === '' ? 'Sapling key hata di gayi' : 'Sapling key save ki gayi', (int) $me['user_id'], 'provider_key');
+        json_out(['ok' => true]);
+
+    case 'content_provider_test':
+        $me = require_client();
+        try {
+            json_out(cq_provider_test((string) ($in['provider'] ?? '')));
+        } catch (InvalidArgumentException $e) {
+            fail($e->getMessage());
+        }
+
     case 'content_evidence':
         $me = require_client();
         $task = cq_task_or_fail((int) $me['user_id'], (int) ($in['id'] ?? 0));

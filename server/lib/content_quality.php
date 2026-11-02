@@ -104,38 +104,63 @@ function cq_sources(int $taskId): array
     return $st->fetchAll();
 }
 
-/** Where each required gate stands for one version. Pure reading: never changes anything. */
+/** The newest result of every provider for one version, grouped by check type (two detectors = two rows, never averaged). */
+function cq_results_by_provider(int $taskId, int $version): array
+{
+    $st = db()->prepare('SELECT * FROM content_checks WHERE task_id = ? AND version = ? ORDER BY id');
+    $st->execute([$taskId, $version]);
+    $out = [];
+    foreach ($st->fetchAll() as $r) {
+        $out[$r['check_type']][$r['provider']] = $r;
+    }
+    return $out;
+}
+
+/**
+ * Where each required gate stands for one version. Pure reading: never changes anything.
+ * With several providers for one gate each result is listed; the gate FAILS if any provider fails, PASSES if at least one passes and
+ * none fails, and is NOT VERIFIED when nothing usable exists (a provider that could not check never blocks another that did).
+ */
 function cq_gates(int $taskId, int $version): array
 {
     $state = cq_state($taskId);
-    $checks = cq_latest_checks($taskId, $version);
-    $gate = function (string $type, callable $judge) use ($checks): array {
-        $c = $checks[$type] ?? null;
-        if (!$c) {
-            return ['status' => 'NOT VERIFIED', 'score' => null, 'provider' => null, 'kind' => null, 'at' => null, 'note' => 'Abhi tak jaanch nahi hui'];
-        }
-        $detail = json_decode((string) $c['detail'], true) ?: [];
-        $status = $c['status'] === 'NOT VERIFIED' ? 'NOT VERIFIED' : $judge($c, $detail);
-        return ['status' => $status, 'score' => $c['score'] !== null ? (float) $c['score'] : null, 'provider' => $c['provider'], 'kind' => $c['kind'], 'at' => (int) $c['finished_at'],
-            'language' => $c['language'], 'note' => (string) ($detail['note'] ?? $detail['error'] ?? '')];
-    };
-    $g = [
-        'grammar'      => $gate('grammar', fn($c) => (float) $c['score'] >= CQ_GRAMMAR_MIN ? 'PASS' : 'FAIL'),
-        'ai_detection' => $gate('ai_detection', fn($c) => (float) $c['score'] <= CQ_AI_MAX ? 'PASS' : 'FAIL'),
-        'plagiarism'   => $gate('plagiarism', function ($c, $d) {
-            return ((float) $c['score'] === 0.0 && empty($d['unattributed'])) ? 'PASS' : 'FAIL';
-        }),
+    $all = cq_results_by_provider($taskId, $version);
+    $judge = [
+        'grammar'      => fn($c, $d) => (float) $c['score'] >= CQ_GRAMMAR_MIN ? 'PASS' : 'FAIL',
+        'ai_detection' => fn($c, $d) => (float) $c['score'] <= CQ_AI_MAX ? 'PASS' : 'FAIL',
+        'plagiarism'   => fn($c, $d) => ((float) $c['score'] === 0.0 && empty($d['unattributed'])) ? 'PASS' : 'FAIL',
+        'factual'      => fn($c, $d) => 'PASS',
     ];
-    $factual = $gate('factual', fn($c) => 'PASS');
-    if ($factual['status'] === 'PASS' && !cq_sources($taskId)) {
-        $factual = ['status' => 'NOT VERIFIED', 'score' => null, 'provider' => $factual['provider'], 'kind' => $factual['kind'], 'at' => $factual['at'], 'note' => 'Source register khali hai'];
+    $g = [];
+    foreach ($judge as $type => $fn) {
+        $results = [];
+        foreach ($all[$type] ?? [] as $c) {
+            $d = json_decode((string) $c['detail'], true) ?: [];
+            $results[] = ['status' => $c['status'] === 'NOT VERIFIED' ? 'NOT VERIFIED' : $fn($c, $d), 'score' => $c['score'] !== null ? (float) $c['score'] : null, 'provider' => $c['provider'],
+                'kind' => $c['kind'], 'at' => (int) $c['finished_at'], 'language' => $c['language'], 'note' => (string) ($d['note'] ?? $d['error'] ?? '')];
+        }
+        $statuses = array_column($results, 'status');
+        $status = in_array('FAIL', $statuses, true) ? 'FAIL' : (in_array('PASS', $statuses, true) ? 'PASS' : 'NOT VERIFIED');
+        $main = null;
+        foreach ($results as $r) { // the result that decides: a failing one first, then a passing one, then whatever exists
+            if ($r['status'] === $status) {
+                $main = $r;
+                break;
+            }
+        }
+        $main = $main ?? ($results[0] ?? null);
+        $g[$type] = ['status' => $status, 'score' => $main['score'] ?? null, 'provider' => $main['provider'] ?? null, 'kind' => $main['kind'] ?? null, 'at' => $main['at'] ?? null,
+            'language' => $main['language'] ?? null, 'note' => $main ? $main['note'] : 'Abhi tak jaanch nahi hui', 'results' => $results];
     }
-    $g['factual'] = $factual;
+    if ($g['factual']['status'] === 'PASS' && !cq_sources($taskId)) {
+        $g['factual']['status'] = 'NOT VERIFIED';
+        $g['factual']['note'] = 'Source register khali hai';
+    }
     $evidenceOk = true;
     foreach (['grammar', 'ai_detection', 'plagiarism'] as $t) {
-        $evidenceOk = $evidenceOk && isset($checks[$t]) && $checks[$t]['provider'] !== '' && (int) $checks[$t]['finished_at'] > 0;
+        $evidenceOk = $evidenceOk && array_filter($g[$t]['results'], fn($r) => $r['provider'] !== '' && $r['at'] > 0 && $r['status'] !== 'NOT VERIFIED');
     }
-    $g['evidence'] = ['status' => $evidenceOk ? 'PASS' : 'NOT VERIFIED', 'score' => null, 'provider' => null, 'kind' => null, 'at' => null, 'note' => $evidenceOk ? '' : 'Teeno checks ka provider naam aur samay chahiye'];
+    $g['evidence'] = ['status' => $evidenceOk ? 'PASS' : 'NOT VERIFIED', 'score' => null, 'provider' => null, 'kind' => null, 'at' => null, 'note' => $evidenceOk ? '' : 'Teeno checks ka provider naam aur samay chahiye', 'results' => []];
 
     $statuses = array_column($g, 'status');
     $overall = in_array('FAIL', $statuses, true) ? 'REJECTED' : (in_array('NOT VERIFIED', $statuses, true) ? 'NOT VERIFIED' : 'APPROVED');
@@ -454,13 +479,178 @@ function cq_approve(int $userId, int $taskId, string $step): array
     return ['ok' => true];
 }
 
+// ---------------------------------------------------------------------------------------------- AI-detection provider (Sapling)
+
+/** Sapling's AI detector supports these article languages (official docs, checked 2026-11-02). Hindi and Hinglish are not on the list. */
+const CQ_SAPLING_LANGUAGES = ['english', 'spanish', 'portuguese', 'french', 'german', 'italian', 'dutch', 'japanese'];
+
+function cq_key_file(): string
+{
+    return dirname((string) cfg('db_path')) . '/provider_keys.json';
+}
+
+/** An API key: config.php first, else the owner's key saved from the page (outside the web root, mode 600). Never logged, never sent back. */
+function cq_provider_key(string $provider): string
+{
+    $fromConfig = (string) cfg($provider . '_api_key');
+    if ($fromConfig !== '') {
+        return $fromConfig;
+    }
+    $f = json_decode((string) @file_get_contents(cq_key_file()), true);
+    return is_array($f) ? (string) ($f[$provider]['key'] ?? '') : '';
+}
+
+function cq_provider_key_save(string $provider, string $key): void
+{
+    if ($provider !== 'sapling' || ($key !== '' && !preg_match('/^[A-Za-z0-9]{32}$/', $key))) {
+        throw new InvalidArgumentException('Sapling ki key 32 akshar (a-z, A-Z, 0-9) ki hoti hai');
+    }
+    $f = json_decode((string) @file_get_contents(cq_key_file()), true);
+    $f = is_array($f) ? $f : [];
+    if ($key === '') {
+        unset($f[$provider]);
+    } else {
+        $f[$provider] = ['key' => $key, 'saved_at' => time(), 'verified_at' => 0];
+    }
+    $tmp = cq_key_file() . '.tmp';
+    if (@file_put_contents($tmp, json_encode($f), LOCK_EX) === false) {
+        throw new RuntimeException('Key save nahi ho payi');
+    }
+    @chmod($tmp, 0600);
+    rename($tmp, cq_key_file());
+}
+
+function cq_provider_mark_verified(string $provider): void
+{
+    $f = json_decode((string) @file_get_contents(cq_key_file()), true);
+    if (is_array($f) && isset($f[$provider])) {
+        $f[$provider]['verified_at'] = time();
+        @file_put_contents(cq_key_file(), json_encode($f), LOCK_EX);
+    }
+}
+
+function cq_provider_verified_at(string $provider): int
+{
+    $f = json_decode((string) @file_get_contents(cq_key_file()), true);
+    return is_array($f) ? (int) ($f[$provider]['verified_at'] ?? 0) : 0;
+}
+
+function cq_http_json(string $url, array $payload, array $headers): array
+{
+    if (isset($GLOBALS['jarvis_http_json']) && is_callable($GLOBALS['jarvis_http_json'])) { // test hook
+        return ($GLOBALS['jarvis_http_json'])($url, $payload, $headers);
+    }
+    $ch = curl_init($url);
+    curl_setopt_array($ch, [CURLOPT_POST => true, CURLOPT_POSTFIELDS => json_encode($payload, JSON_UNESCAPED_UNICODE), CURLOPT_RETURNTRANSFER => true, CURLOPT_TIMEOUT => 40, CURLOPT_CONNECTTIMEOUT => 8,
+        CURLOPT_HTTPHEADER => array_merge(['Content-Type: application/json', 'Accept: application/json'], $headers)]);
+    $body = curl_exec($ch);
+    $code = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    $err = curl_error($ch);
+    curl_close($ch);
+    return [$code, (string) $body, $err];
+}
+
+/** One real Sapling request. Returns ['ok' => bool, 'error' => ?, 'score' => percent AI, 'data' => response]. The key is only ever in the header. */
+function cq_sapling_request(string $text): array
+{
+    $key = cq_provider_key('sapling');
+    if ($key === '') {
+        return ['ok' => false, 'error' => 'Sapling ki key set nahi hai (Provider Settings me daalo)'];
+    }
+    $url = (string) (cfg('sapling_url') ?: 'https://api.sapling.ai/api/v1/aidetect');
+    [$code, $body, $err] = cq_http_json($url, ['text' => $text, 'sent_scores' => true, 'zero_retention' => true], ['Authorization: Bearer ' . $key]);
+    $j = json_decode($body, true);
+    if ($code === 401 || $code === 403) {
+        return ['ok' => false, 'error' => 'Sapling ne key manzoor nahi ki (HTTP ' . $code . ')'];
+    }
+    if ($code === 429) {
+        return ['ok' => false, 'error' => 'Sapling ki limit pahunch gayi (HTTP 429), baad me try karo'];
+    }
+    if ($code !== 200 || !is_array($j) || !isset($j['score']) || !is_numeric($j['score'])) {
+        return ['ok' => false, 'error' => 'Sapling ne sahi jawab nahi diya (HTTP ' . $code . ($err !== '' ? ', ' . mb_substr($err, 0, 100) : '') . ')'];
+    }
+    return ['ok' => true, 'score' => round(max(0.0, min(1.0, (float) $j['score'])) * 100, 1), 'data' => $j];
+}
+
+/** AI-detection check of one version with Sapling. Always records a row (NOT VERIFIED with the reason when it could not be done). */
+function cq_ai_detect_run(int $userId, int $taskId, int $version): array
+{
+    $v = cq_version_get($taskId, $version);
+    if (!$v) {
+        throw new InvalidArgumentException('Version nahi mili');
+    }
+    $state = cq_state($taskId);
+    $started = time();
+    $provider = 'Sapling AI Detector API v1';
+    $skip = function (string $why) use ($userId, $taskId, $version, $provider, $state, $started): array {
+        cq_check_add($userId, $taskId, $version, 'ai_detection', $provider, 'provider', null, 'NOT VERIFIED', $state['language'], ['error' => $why], '', $started);
+        return ['status' => 'NOT VERIFIED', 'score' => null, 'error' => $why];
+    };
+    if (cq_provider_key('sapling') === '') {
+        return $skip('CONFIGURATION REQUIRED: Sapling ki key nahi hai');
+    }
+    if (!cq_consent($userId)) {
+        return $skip('Bahari provider ki ijazat nahi di gayi: text Sapling ko nahi bheja gaya');
+    }
+    if (!in_array(mb_strtolower(trim($state['language'])), CQ_SAPLING_LANGUAGES, true)) {
+        return $skip('Sapling "' . $state['language'] . '" ko support nahi karta (English, Spanish, Portuguese, French, German, Italian, Dutch, Japanese): natija praman nahi maana jayega');
+    }
+    $text = trim(preg_replace('/!\[[^\]]*\]\([^)]*\)/u', '', preg_replace('/\[([^\]]*)\]\([^)]*\)/u', '$1', (string) $v['doc']['body']) ?? '') ?? '');
+    $text = preg_replace('/^\s{0,3}#{1,6}\s+/mu', '', $text) ?? $text;
+    if (mb_strlen($text) < 500) {
+        return $skip('Text bahut chhota hai: Sapling 500 akshar se kam par bharosemand natija nahi deta');
+    }
+    if (mb_strlen($text) > 190000) {
+        return $skip('Text bahut bada hai (limit 200000 akshar)');
+    }
+    $r = cq_sapling_request($text);
+    if (!$r['ok']) {
+        return $skip($r['error']);
+    }
+    $d = $r['data'];
+    if (!empty($d['low_confidence'])) {
+        return $skip('Sapling ne kam bharose ka natija bataya (' . implode(', ', array_map('strval', (array) ($d['low_confidence_reasons'] ?? []))) . '): praman nahi maana jayega. Score ' . $r['score'] . '%');
+    }
+    cq_provider_mark_verified('sapling');
+    $segments = [];
+    foreach (array_slice((array) ($d['segments'] ?? []), 0, 20) as $sg) {
+        $segments[] = ['start' => (int) ($sg['start'] ?? 0), 'end' => (int) ($sg['end'] ?? 0), 'text' => mb_substr((string) ($sg['text'] ?? ''), 0, 160)];
+    }
+    $status = $r['score'] <= CQ_AI_MAX ? 'PASS' : 'FAIL';
+    cq_check_add($userId, $taskId, $version, 'ai_detection', $provider, 'provider', $r['score'], $status, $state['language'],
+        ['verdict' => (string) ($d['verdict'] ?? ''), 'ai_fraction' => $d['ai_fraction'] ?? null, 'model_version' => (string) ($d['version'] ?? ''), 'flagged' => $segments,
+         'note' => 'Sapling document score x 100 (0 = human, 100 = AI). A low number is not proof of human authorship.'],
+        json_encode(['score' => $d['score'], 'verdict' => $d['verdict'] ?? null, 'ai_fraction' => $d['ai_fraction'] ?? null, 'version' => $d['version'] ?? null], JSON_UNESCAPED_UNICODE), $started);
+    return ['status' => $status, 'score' => $r['score'], 'verdict' => $d['verdict'] ?? null, 'flagged' => $segments];
+}
+
+/** "Test connection": one real request with our own harmless sample text (not the owner's article). Marks the provider verified only on a real answer. */
+function cq_provider_test(string $provider): array
+{
+    if ($provider !== 'sapling') {
+        throw new InvalidArgumentException('Ye provider abhi juda nahi hai');
+    }
+    $sample = str_repeat('The village market opens early in the morning. Farmers bring fresh vegetables, and shopkeepers weigh them carefully before selling. Many people also buy tea, bread and milk on the same street. ', 3);
+    $r = cq_sapling_request($sample);
+    if ($r['ok']) {
+        cq_provider_mark_verified('sapling');
+    }
+    return $r['ok'] ? ['ok' => true, 'message' => 'Sapling se asli jawab mila: connection theek hai (sample score ' . $r['score'] . '%).'] : ['ok' => false, 'message' => $r['error']];
+}
+
 function cq_provider_states(int $userId): array
 {
+    $key = cq_provider_key('sapling');
+    $verified = cq_provider_verified_at('sapling');
+    $saplingState = $key === '' ? 'CONFIGURATION REQUIRED (Sapling ki free ya paid API key chahiye)'
+        : ($verified > 0 || cfg('sapling_api_key') ? ($verified > 0 ? 'CONNECTED & VERIFIED (asli jawab mila: ' . date('Y-m-d H:i', $verified) . ')' : 'CONFIGURED, abhi asli jawab nahi aaya (Test connection dabao)') : 'CONFIGURED, abhi asli jawab nahi aaya (Test connection dabao)');
     return [
         'grammar'      => ['name' => 'LanguageTool (public API v2)', 'state' => cq_consent($userId) ? 'CONNECTED & VERIFIED (jab bhi chalta hai, har jaanch ka asli natija save hota hai)' : 'CONFIGURATION REQUIRED (bahari provider ki ijazat chahiye)',
             'languages' => 'English (US/UK), French, German, Spanish, Portuguese, Italian, Dutch, Russian, Arabic, Chinese, Japanese... Hindi/Hinglish: nahi'],
-        'ai_detection' => ['name' => 'koi API juda nahi', 'state' => 'CONFIGURATION REQUIRED (aap ZeroGPT/GPTZero/Copyleaks ka asli natija yahan daalte ho; "manual" likha dikhega)', 'languages' => 'detector par nirbhar'],
-        'plagiarism'   => ['name' => 'koi API juda nahi', 'state' => 'CONFIGURATION REQUIRED (aap checker ka asli natija yahan daalte ho; "manual" likha dikhega)', 'languages' => 'checker par nirbhar'],
+        'ai_detection' => ['name' => 'Sapling AI Detector API v1', 'state' => $saplingState, 'languages' => 'English, Spanish, Portuguese, French, German, Italian, Dutch, Japanese. Hindi/Hinglish: nahi',
+            'note' => 'Free key: 50,000 akshar roz. Text zero_retention ke saath jata hai. ZeroGPT/GPTZero ka natija aap haath se bhi daal sakte ho; dono alag dikhte hain, average nahi hota.'],
+        'plagiarism'   => ['name' => 'koi API juda nahi', 'state' => 'UNAVAILABLE (verified documentation wala koi plagiarism API abhi juda nahi: Copyleaks ko public webhook chahiye). Aap checker ka asli natija yahan daalte ho; "manual" likha dikhega',
+            'languages' => 'checker par nirbhar'],
     ];
 }
 

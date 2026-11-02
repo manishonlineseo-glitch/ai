@@ -30,7 +30,7 @@ def run(name):
 
 
 def main():
-    names = ["server_test", "agent_test", "security_test", "content_test", "content_page_test", "keepalive_test", "cq_test", "tutor_test"] + (["live_smoke"] if "--live" in sys.argv else [])
+    names = ["server_test", "agent_test", "security_test", "content_test", "content_page_test", "keepalive_test", "cq_test", "tutor_test", "provider_test"] + (["live_smoke"] if "--live" in sys.argv else [])
     out = {"date": datetime.datetime.now().astimezone().isoformat(timespec="seconds"), "suites": {}}
     for n in names:
         print(f"\n=== {n} ===")
