@@ -63,6 +63,8 @@ HTTPS round trip PC↔server ≈ 150 ms, Chrome start ≈ 0.2–0.5 s. Everythin
 | `lib/leads.php`, `lib/whatsapp.php` | Campaigns/leads/call logs; WhatsApp contacts list. |
 | `lib/library.php`, `lib/medical.php`, `lib/knowledge.php` | Owner's files (PDF/photo/video/db) indexed for questions; medical + exam library; 570 open-source playbooks in `knowledge/` used as reference text. |
 | `lib/content_rules.php` | **Content Rules**: `content_check()` measures a draft against the owner's rules (title/meta/slug/keyword placement, density, links, headings, paragraph and sentence length, transitions, passive, Flesch, closing CTA, stock AI phrases, em dashes); `content_write()` writes with Gemini and revises up to 3 times (keeps the better draft, time-boxed). |
+| `lib/content_quality.php` | **CQO gates**: versions, checks (provider or owner-run), the five gates and their statuses, strict/review mode, LanguageTool grammar provider behind a consent switch, correction cycles (max 3), owner approval and publish authorisation (record only), source register, audit, dashboard. |
+| `lib/tutor.php` | **Language tutor**: learners and class plans, daily lesson (validated JSON), correction, spaced-repetition quiz, progress and streak, class-time reminders, speech language codes. |
 | `content/rules.md` | The owner's content rules file (+ Yoast reference + human-writing section). **Not in git** (private); copied to the live site by `deploy.ps1`. `content/.htaccess` denies web access. |
 | `lib/claude.php` | Direct Claude API chat loop (used when `brain` = api). |
 | `lib/db.php` | SQLite connection (WAL), schema + migrations (`SCHEMA_VERSION`), `kv` store. |
@@ -87,7 +89,8 @@ Version: `versionCode 3 / 1.2` in `build.gradle.kts`. **Gradle is not installed 
 
 ### Other
 * `deploy/` — `deploy.ps1` (push + update server + copy the private content rules), `server-update.sh` (runs on the server: lint, backup, rsync, health check, rollback), `release_tools.py` (makes the signing key, signs and publishes the Windows/Android app), `backup-db.sh` (manual DB copy on the server), `pull-db-backup.ps1` (copies the newest server backup to this PC), `README.md`.
-* `tests/` — `server_test.py`, `agent_test.py`, `security_test.py`, `content_test.py`, `live_smoke.py`, `run_all.py`, `last_run.json`, `fixtures/good_article.md`.
+* `knowledge/education/` (spoken English teacher, learn any language) and `knowledge/content/content-quality-originality.md`: the teaching method and the CQO rules saved in the knowledge library so the model gets them with every lesson / content job.
+* `tests/` — `server_test.py`, `agent_test.py`, `security_test.py`, `content_test.py`, `cq_test.py`, `tutor_test.py`, `keepalive_test.py`, `content_page_test.py`, `live_smoke.py`, `run_all.py`, `last_run.json`, `fixtures/good_article.md`.
 * `docs/` — `SYSTEM.md` (this file), `SECURITY_PRIVATE.md` (not in git).
 * Repository root (`jarvis.py`, `news.py`, `Face-Recognition/` ...) — the original desktop Jarvis scripts, not part of this system.
 * `server/knowledge/` — playbooks + `mcp_server.py` (knowledge MCP server).
@@ -126,6 +129,38 @@ Measured on the live server (4 real runs, 2026-10-28): 4 of 4 passed every requi
 
 To change a rule's wording: edit it on the Content page (or `server/content/rules.md` and deploy). To change a measured number: `content_check()`, tests, `deploy.ps1`.
 
+## 5c. Content Quality & Originality gates (CQO)
+
+The owner's master rulebook (content/rules.md section 9) is enforced around every content task. All numbers below are the owner's; nothing is ever invented.
+
+| Gate | Rule | How it is checked today |
+|---|---|---|
+| Grammar | 85% or more | **Real provider: LanguageTool public API**, only after the owner switches on "Bahari provider allow karo" (the article text then leaves the server). Score = 100 x (1 - weighted errors / words), shown as the system's own score from the provider's findings. English (US/UK), French, German, Spanish, Portuguese, Italian, Dutch, Russian, Arabic, Chinese, Japanese and a few more. **Hindi, Hinglish and the Indian languages: NOT VERIFIED** (the owner may enter another tool's real result). |
+| AI detection | 8% or less | No detector API is connected (state: CONFIGURATION REQUIRED). The owner runs ZeroGPT / GPTZero / Copyleaks and enters the real number, which is stored as kind "manual". A detector that does not support the language is NOT VERIFIED. |
+| Plagiarism | raw similarity exactly 0% and no unattributed copying | Same: the owner enters the real checker result; both numbers (raw, unattributed) are kept. |
+| Factual | sources checked | Source register (name, URL, access date, information used, type, reliability) + the owner's tick. |
+| Evidence | provider, time, version | Every check row has provider name, kind, version, start and finish time, language and a (secret-free) raw response. |
+
+* **Statuses:** APPROVED (all pass), REJECTED (any fail), NOT VERIFIED (any missing; a failure wins over a gap), MANUAL REVIEW REQUIRED (3 cycles used and still not approved).
+* **Versions:** the writer saves version 1; every owner edit and every correction cycle is a new numbered version; none is ever deleted; checks belong to one version, so a new version starts NOT VERIFIED and must be checked again in full.
+* **Correction (max 3 cycles):** "Check + auto sudhaar" re-checks grammar and, while it FAILS, asks the model to fix the listed errors (prompt forbids evasion: no deliberate mistakes, hidden characters, random synonyms, synonym-swapping against copying; keeps facts and citations) and re-checks the whole new version. "Sudhaar cycle chalao" does the same from the owner's detector/plagiarism report (treated as data). Every cycle records its reason.
+* **Strict / review mode:** strict (default) can be approved; review mode shows everything but can never approve.
+* **Approval:** two explicit owner steps ("approve", then "publish allow"); the second only records the permission: **nothing is sent to any website or platform by this code**.
+* **Dashboard:** totals, approved/rejected/pending, manual review, failed checks, average grammar/AI/plagiarism from the records, and each provider's honest state (CONNECTED & VERIFIED / CONFIGURATION REQUIRED).
+* **Tested for real on 2026-11-02:** a real LanguageTool call from the server (4 findings on a 33-word sample, score 89.4). Not connected: any AI-detection or plagiarism API (needs paid credentials: Copyleaks, Originality.ai, ...; their documentation, price, language coverage and terms must be checked first).
+
+## 5d. Language tutor (the "Class" tab)
+
+For a beginner such as a village boy who speaks Hindi: English (American, British, Indian, Australian) or any other language. The trainer is asked first (name and level, class time, minutes, days, accent or language, goal); the form and the chat ("english sikhna hai") ask exactly that.
+
+* **Every day:** one lesson from the model, validated before it is shown: a real-life theme, 10 everyday words (meaning and pronunciation hint in the learner's own script, a short example), 5 speaking sentences, a 6-line dialogue, a writing task, a speaking task, a tip and **a diagram** (boxes, flow, timeline or word map) that the page draws itself from the data (no model-made HTML).
+* **Method:** `knowledge/education/spoken-english-teacher.md` and `learn-any-language.md` go into every lesson prompt: simple Hindi first, one idea at a time, daily-use words, sentence frames, village examples, never harsh, hard sounds for Hindi speakers, American vs British differences.
+* **Practice:** listen (browser speech synthesis in the chosen accent), speak (browser speech recognition, Chrome), write; the model corrects kindly (at most 3 mistakes, one simple Hindi sentence each, praise first, other ways to say it, a tip); a spoken answer is treated as a possibly misheard transcript. 60 corrections per learner per day.
+* **Revision:** spaced repetition (boxes 1-6, due after 0, 1, 2, 4, 8, 16 days; a wrong answer goes back to box 1) as a 4-choice quiz.
+* **Progress:** streak, words learned and mastered, accuracy of the last 7 days, 14-day chart, repeating mistakes.
+* **Class time:** at the trainer's time (within 30 minutes) a chat message and, if the phone is online, a phone notification: once a day per learner, on the chosen days.
+* **Measured on the live server (2026-11-02):** a real lesson in 4.3 s (theme "mobile", 10 words with Hindi meanings, a Subject + Verb + Object diagram) and a real correction in 3.1 s ("I goes to market for buy vegetable yesterday" -> "I went to the market to buy vegetables yesterday", 3 mistakes explained in Hindi). Nobody has used the Class tab with a real learner yet.
+
 ## 6. Testing
 
 | Suite | Tests | What it covers |
@@ -135,12 +170,14 @@ To change a rule's wording: edit it on the Content page (or `server/content/rule
 | `tests/security_test.py` | **33** | Ed25519 verification (valid, tampered, wrong key, garbage, platform/version binding, the real release key matches the app and the APK); the update installer (signed file installed; unsigned, wrong-key, swapped-file and re-hashed manifests refused); approvals (screen control and password typing need Approve, standing authority, `vault_fill` never automatic); pause switch (voice, web, agents receive nothing, everyday words never pause); per-account lockout (one stale device password cannot lock the owner, IP-wide limit); 30-day token expiry (legacy paired agents untouched); security alerts and their rate limit; daily database backup (checked copy, 14 kept, no second one the same day). |
 | `tests/content_test.py` | **55** | The owner's rules file is loaded unchanged; a good article passes; every SEO and readability rule fails when broken (title/meta length, keyword in first paragraph / title / meta / slug / headings / image alt, density, word count, image, internal links, subheading gap, paragraph and sentence length, transitions incl. Hinglish, passive incl. Hinglish, Flesch, closing CTA); human-writing signals; parser; writer loop (stops when it passes, revises with exact numbers, keeps the better draft, gives up after 4 rounds, time budget); a whole content task; the brain routes content to it; never claims a ZeroGPT pass. |
 | `tests/content_page_test.py` | **27** | Every Content-page route needs a login (an agent token does not work); the form becomes a clean content task (defaults, whitelisted language, clamped words, control characters removed, max 3 at a time, blocked while paused); list and get; own-text check route and its limits; rules editor (default served, save kept outside the web root and read by the writer, reset, size limits, alert + log); the page script has no syntax error, is wired into the tabs, never uses `innerHTML` for server text. |
+| `tests/cq_test.py` | **59** | Auth and owner isolation; every threshold and boundary (85 / 84.9, 8 / 8.1, 0 / 0.1); manual evidence validation and labelling; unsupported detector language; factual gate and source register; every status combination (a failure wins over a gap); strict and review mode; two-step approval and revoke; publish authorisation sends nothing; versions (never deleted, new version loses approval, old keeps its own evidence); LanguageTool through a local stub (consent off sends nothing, weighted formula, US/UK/French/German codes, Hindi/Hinglish/Tamil NOT VERIFIED, provider 500 / garbage = NOT VERIFIED, long text split, raw response saved); correction cycles (fix and recheck, stop at 3, manual review, prompt forbids evasion and carries the real findings); dashboard numbers; audit; migration is additive. |
+| `tests/tutor_test.py` | **62** | Auth and isolation; the trainer's class plan and validation; accent and language choose the speech voice; lesson validation (cleaning, limits, broken lessons never saved), same-day reuse, prompt content, older words return; correction (clamping, HTML stripped, spoken answers treated gently, daily limit); spaced repetition (box moves, intervals, wrong answer resets, foreign words refused); progress (streak, accuracy, chart, boxes, repeating mistakes); class reminders (time window, days, once a day, phone); the chat asks the trainer's questions; knowledge files saved; the page script (no HTML injection, SVG text only, speech fallbacks). |
 | `tests/keepalive_test.py` | **20** | Offline alert once and not repeated; back-online notice; a short gap is no alert; a never-online device is not reported; grace after a hosting outage; log line; scheduler also runs the watchdog; deleted device ignored; the agent loop survives a non-network error; tray watchdog wired in; keep-awake on mains / desktop / battery / release on stop; the Task Scheduler script parses, has the restart settings, never asks for admin, needs a typed YES for the power change, and its dry run changes nothing. |
 | `tests/live_smoke.py` (`run_all.py --live`) | **11** | The live site with no password: HTTPS, redirect, headers, secret files not public, removed backdoors stay gone, auth required, setup closed, new code deployed. |
 
 Run: `agent\venv\Scripts\python.exe tests\run_all.py` (offline) or add `--live`. The agent venv needs `pip install cryptography` for the tests only; the exe excludes it.
 
-Last full run: **2026-11-02 — 228 tests (217 offline + 11 live), 33 sub-checks, 0 failures** (`tests/last_run.json`). Bugs the tests found and that were fixed the same day: song request "baja do" fell to the slow AI;
+Last full run: **2026-11-02 — 349 tests (338 offline + 11 live), 33 sub-checks, 0 failures** (`tests/last_run.json`). Bugs the tests found and that were fixed the same day: song request "baja do" fell to the slow AI;
 "awaaz badhao" ignored when spoken from the phone; "chrome kholo aur google search karo" was cut to a Google search; the agent counted a network error as a wrong password.
 Measured: chat → queued median 16 ms (max 33); queued → agent poll returns median 163 ms (before the 50 ms poll step).
 **Not tested:** a real command from the Android app to the live server (needs the owner's password), the Android app itself (Kotlin is not compiled on this PC, so the Android signature check and re-login are untested), a real ZeroGPT run, the on-screen banner during a real task, Windows autostart after a reboot, behaviour with 2+ PCs online, load. There is no CI yet — tests run by hand.
@@ -153,6 +190,7 @@ Measured: chat → queued median 16 ms (max 33); queued → agent poll returns m
 * Fast brain: Gemini with thinking off; failing providers skipped. On-screen banner and visible mouse while the agent works.
 * **Security fixes (2026-10-28):** screen control and password typing need Approve; Pause switch (web, chat, tray); updates must carry the owner's Ed25519 signature (Windows app 1.2.5 published and installed, signed); lockout per IP + username; agent tokens expire after 30 days and the apps sign in again; security alerts to log and phone; daily checked database backup (14 kept) inside the scheduler.
 * **Content Rules:** the owner's rules file is enforced by a program checker and a write-check-fix loop; 4 of 4 real live runs passed all required checks. **Content page** in the web app (brief form, history, result with copy buttons, own-text check, rules editor); layout checked in a browser through the page DOM only, a real phone screen was not looked at.
+* **CQO gates and the Class tab (2026-11-02):** see sections 5c and 5d. Real checks done: LanguageTool, a real lesson and a real correction. Not connected: an AI-detection API and a plagiarism API (owner enters real results). Not used yet with a real learner.
 * **Keep-alive (2026-11-02):** offline and back-online alerts to the phone, agent survives stray errors, tray watchdog, keeps the laptop awake on mains power, signed app 1.2.6 installed. The Task Scheduler script exists but **has not been run** (the owner runs it).
 * Deploy by git pull with backup and rollback; 181 automated tests.
 
@@ -170,7 +208,7 @@ Measured: chat → queued median 16 ms (max 33); queued → agent poll returns m
 3. **Keep the laptop agent alive (mostly done):** the app survives errors, keeps the PC awake on mains and the server alerts when it goes offline. **Owner action:** run `agent\install_keepalive.ps1` once (and `-NoSleepOnPower` if the lid is closed during the day). Still open: an alert by WhatsApp/e-mail when the phone is offline too; Wake-on-LAN.
 4. **CI:** GitHub Actions running `tests/run_all.py`; deploy only when green.
 5. **2FA** for the owner login (TOTP), separate admin and operator roles; tokens in DPAPI / Keystore.
-6. **Content:** brand profiles beyond Wisi Pay (rules per brand), export of the result as a ready-to-publish file, plagiarism and grammar API checks if the owner has keys, publishing to the site.
+6. **Content:** connect a real AI-detection and plagiarism API once the owner has credentials (check docs, price, language coverage, terms first); a Hindi/Hinglish-aware grammar provider; brand profiles beyond Wisi Pay (rules per brand), export of the result as a ready-to-publish file, plagiarism and grammar API checks if the owner has keys, publishing to the site.
 7. **Speed:** push instead of poll (needs a VPS with WebSockets or FCM), stream AI answers, cache frequent plans.
 8. **More reflexes** (windows, screenshot to phone, type text, open file or folder, media keys), **several PCs online at once**, iPad and TV agents.
 9. **Owner tools:** a Commands and Audit page, daily health report.
@@ -179,6 +217,7 @@ Measured: chat → queued median 16 ms (max 33); queued → agent poll returns m
 
 | Date | Change |
 |---|---|
+| 2026-11-02 (CQO + Class) | **Content Quality & Originality gates** (owner's master rulebook): three strict gates, versions, evidence, 3 correction cycles, owner approval then publish authorisation, strict/review mode, LanguageTool grammar provider with consent, dashboard. **Language tutor (Class tab)**: trainer's class plan, daily lesson with diagram, speaking and writing practice with corrections, spaced-repetition quiz, progress, class reminders, American/British and other languages. Teaching method and CQO rules saved in the knowledge library. Schema v12 (additive). Tests 228 to 349. |
 | 2026-11-02 | **Laptop keep-alive:** offline / back-online alerts (watchdog), agent loop survives stray errors, tray watchdog, keep-awake on mains power, `install_keepalive.ps1` for the Scheduled Task, app 1.2.6 (signed). The agent had been closed for days before this was noticed: nothing alerted anyone. Tests 208 to 228. |
 | 2026-10-28 (content page) | **Content page** in the web app: brief form, history, result with copy buttons and report, "Dobara check", own-text check, rules editor (owner's copy kept outside the web root). Tests 181 to 208. |
 | 2026-10-28 (later) | **Security fixes:** approvals for screen control and password typing, Pause switch, Ed25519 signed updates (key made, app 1.2.5 signed and installed), per-account lockout, 30-day agent tokens, security alerts, daily database backup. **Content Rules:** owner's rules file, checker, writer loop, content tasks. Tests 93 to 181. |
