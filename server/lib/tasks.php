@@ -350,6 +350,7 @@ function scheduler_run(): array
         if (db_backup_if_due()) {
             $ran[] = 'db_backup';
         }
+        agents_watchdog();
         foreach ($pdo->query('SELECT id FROM users')->fetchAll(PDO::FETCH_COLUMN) as $uid) {
             $uid = (int) $uid;
             routines_seed($uid);

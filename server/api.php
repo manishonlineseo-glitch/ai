@@ -1047,6 +1047,7 @@ switch ($route) {
     // ---------- PC agent side ----------
     case 'agent_poll':
         $agent = require_agent();
+        agents_watchdog();
         if (agents_paused((int) $agent['user_id'])) { // pause switch: stay online but hand out nothing
             $pdo->prepare('UPDATE devices SET last_seen = ? WHERE id = ?')->execute([time(), $agent['id']]);
             json_out(['commands' => [], 'paused' => true]);

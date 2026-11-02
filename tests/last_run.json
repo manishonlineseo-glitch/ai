@@ -1,5 +1,5 @@
 {
-  "date": "2026-10-28T15:43:37+05:30",
+  "date": "2026-11-02T14:20:47+05:30",
   "suites": {
     "server_test": {
       "tests": 49,
@@ -40,9 +40,17 @@
       "errors": 0,
       "skipped": 0,
       "ok": true
+    },
+    "keepalive_test": {
+      "tests": 20,
+      "subchecks": 0,
+      "failures": 1,
+      "errors": 0,
+      "skipped": 0,
+      "ok": false
     }
   },
-  "total_tests": 197,
+  "total_tests": 217,
   "total_subchecks": 33,
-  "all_ok": true
+  "all_ok": false
 }

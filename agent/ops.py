@@ -15,7 +15,7 @@ import threading
 import time
 from ctypes import wintypes
 
-VERSION = "1.2.5"
+VERSION = "1.2.6"
 
 # Updates are installed only if they carry a valid Ed25519 signature from the owner's release key (deploy/release_tools.py).
 # A taken-over server can therefore not push code to this PC: it does not have the private key.

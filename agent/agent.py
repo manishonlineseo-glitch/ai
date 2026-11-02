@@ -772,6 +772,30 @@ def find_builtin_app(name):
     return shutil.which(exe)
 
 
+ES_CONTINUOUS, ES_SYSTEM_REQUIRED = 0x80000000, 0x00000001
+
+
+def keep_awake_loop(stop, interval=30):
+    """While the agent runs and the laptop is on mains power, tell Windows the PC is in use so it does not go to sleep (a sleeping laptop
+    is an offline agent). On battery the normal power plan applies again. No Windows setting is changed: the request ends with the agent."""
+    if sys.platform != "win32":
+        return
+    kernel32 = ctypes.windll.kernel32
+    last = None
+    while not stop.is_set():
+        try:
+            battery = psutil.sensors_battery()
+            plugged = battery is None or battery.power_plugged
+        except Exception:
+            plugged = True
+        want = ES_CONTINUOUS | (ES_SYSTEM_REQUIRED if plugged else 0)
+        if want != last:
+            kernel32.SetThreadExecutionState(want)
+            last = want
+        stop.wait(interval)
+    kernel32.SetThreadExecutionState(ES_CONTINUOUS)  # agent stopped: back to the normal power plan
+
+
 def run(cfg, stop=None, on_status=None):
     """The agent loop. `stop` (a threading.Event) ends it; `on_status("online"|"offline"|"blocked"|"rejected")` reports its state."""
     stop = stop or threading.Event()
@@ -817,6 +841,8 @@ def run(cfg, stop=None, on_status=None):
                 pass
 
     threading.Thread(target=ticker, daemon=True).start()
+    if cfg.get("keep_awake", True):
+        threading.Thread(target=keep_awake_loop, args=(stop,), daemon=True).start()
     ops.start_updater(s, base, stop)
     threading.Thread(target=make_worker(ai_queue), daemon=True).start()
     threading.Thread(target=make_worker(brain_queue), daemon=True).start()
@@ -877,6 +903,10 @@ def run(cfg, stop=None, on_status=None):
         except requests.RequestException as e:
             status("offline")
             print("network issue:", e, flush=True)
+            stop.wait(10)
+        except Exception as e:  # anything else (bad JSON, a psutil hiccup...) must never end the agent: log it and carry on
+            status("offline")
+            print("unexpected error, continuing:", type(e).__name__, e, flush=True)
             stop.wait(10)
         stop.wait(cfg["poll_seconds"])
 

@@ -246,6 +246,17 @@ def run_tray():
         t.start()
         return True
 
+    quitting = threading.Event()
+
+    def watchdog():
+        # Belt and braces: if the agent thread ever ends (it should not), start it again within 30 seconds.
+        while not quitting.wait(30):
+            t = stop_holder.get("thread")
+            if t is not None and not t.is_alive() and state["value"] != "rejected":
+                print("agent thread ended, restarting it", flush=True)
+                on_status("starting")
+                start_agent()
+
     def stop_agent():
         if stop_holder["stop"]:
             stop_holder["stop"].set()
@@ -286,6 +297,7 @@ def run_tray():
             pass
 
     def quit_app(_icon, _item):
+        quitting.set()
         stop_agent()
         icon.stop()
 
@@ -298,7 +310,8 @@ def run_tray():
         pystray.MenuItem("Band karo", quit_app),
     )
     if not start_agent():
-        child("--setup")  # first run: ask for the pairing code, then start
+        child("--setup")  # first run: ask for the device login, then start
+    threading.Thread(target=watchdog, daemon=True).start()
     icon.run()
 
 

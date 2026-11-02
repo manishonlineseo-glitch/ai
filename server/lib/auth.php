@@ -3,6 +3,7 @@ declare(strict_types=1);
 
 const DEVICE_COOKIE = 'jv_dev';
 const AGENT_TOKEN_DAYS = 30;
+const AGENT_OFFLINE_AFTER = 180;     // seconds without a poll before an agent counts as offline (it polls every ~19 s)
 const LOGIN_FAILS_PER_ACCOUNT = 8;   // per IP + username, 15 minutes
 const LOGIN_FAILS_PER_IP = 40;       // per IP over all usernames, 15 minutes
 const DEVICE_TYPES = [
@@ -205,5 +206,43 @@ function security_alert(string $text, int $userId = 0, string $kind = 'general')
         }
     } catch (Throwable $e) {
         // an alert must never break the request that caused it
+    }
+}
+
+/**
+ * Watchdog: tells the owner (phone notification + data/security.log) when a PC or phone agent goes offline and when it is back.
+ * Runs from every agent poll and from the scheduler, at most once every 20 seconds. After a hosting outage nobody has polled for a
+ * while, so every agent would look dead: when the watchdog itself was silent for 10 minutes it waits 3 minutes before judging anyone.
+ */
+function agents_watchdog(): void
+{
+    $now = time();
+    if ((int) kv_get('watchdog_last') > $now - 20) {
+        return;
+    }
+    $silent = (int) kv_get('watchdog_last') > 0 && (int) kv_get('watchdog_last') < $now - 600;
+    kv_set('watchdog_last', (string) $now);
+    if ($silent) {
+        kv_set('watchdog_grace_until', (string) ($now + 180));
+    }
+    $grace = (int) kv_get('watchdog_grace_until') > $now;
+    $rows = db()->query('SELECT id, user_id, name, type, last_seen FROM devices WHERE role = "agent" AND blocked = 0')->fetchAll();
+    foreach ($rows as $d) {
+        $key = 'agent_state_' . $d['id'];
+        $state = kv_get($key); // 'on', 'off' or never seen online
+        $online = $now - (int) $d['last_seen'] < AGENT_OFFLINE_AFTER;
+        $kind = $d['type'] === 'android' ? 'Phone' : 'Laptop/PC';
+        if ($online) {
+            if ($state === 'off') {
+                security_alert($kind . ' "' . $d['name'] . '" wapas online aa gaya', (int) $d['user_id'], 'online_' . $d['id']);
+            }
+            if ($state !== 'on') {
+                kv_set($key, 'on');
+            }
+        } elseif ($state === 'on' && !$grace) {
+            kv_set($key, 'off');
+            $mins = max((int) round(($now - (int) $d['last_seen']) / 60), 1);
+            security_alert($kind . ' "' . $d['name'] . '" offline ho gaya (' . $mins . ' minute se koi signal nahi). Internet, sleep ya band hua app check karo.', (int) $d['user_id'], 'offline_' . $d['id']);
+        }
     }
 }
