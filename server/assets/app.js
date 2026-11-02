@@ -227,7 +227,7 @@ let pendingList = [];
 const announced = new Set();
 let noteHook = null;
 
-const TABS = [['chat', 'Chat'], ['tasks', 'Tasks'], ['report', 'Report'], ['notes', 'Notes'], ['devices', 'Devices'], ['skills', 'Seekha'], ['library', 'Library'], ['leads', 'Leads'], ['content', 'Content'], ['learn', 'Class']];
+const TABS = [['chat', 'Chat'], ['tasks', 'Tasks'], ['report', 'Report'], ['notes', 'Notes'], ['devices', 'Devices'], ['skills', 'Seekha'], ['library', 'Library'], ['leads', 'Leads'], ['center', 'Command Center'], ['content', 'Content'], ['learn', 'Class']];
 
 function note(text) {
   if (noteHook) noteHook(text);
@@ -280,7 +280,7 @@ function renderView() {
   document.getElementById('title').textContent = TABS.find(([id]) => id === tab)[1];
   const view = document.getElementById('view');
   view.replaceChildren();
-  ({ chat: viewChat, tasks: viewTasks, report: viewReport, notes: viewNotes, devices: viewDevices, skills: viewSkills, library: viewLibrary, leads: viewLeads, content: viewContent, learn: viewLearn })[tab](view);
+  ({ chat: viewChat, tasks: viewTasks, report: viewReport, notes: viewNotes, devices: viewDevices, skills: viewSkills, library: viewLibrary, leads: viewLeads, center: viewCenter, content: viewContent, learn: viewLearn })[tab](view);
   tick();
 }
 
@@ -402,8 +402,23 @@ async function decide(route, id, approve) {
   tick();
 }
 
-// ---------- command center (status panel above the message box) ----------
-let hud = null; // { el, update(status) } while the chat view is open
+// Clipboard API first, a hidden textarea as the fallback; resolves true when the text was copied.
+async function copyToClipboard(t) {
+  try { await navigator.clipboard.writeText(t); return true; } catch (_) { /* fall through */ }
+  try {
+    const ta = h('textarea', { style: 'position:fixed;left:-9999px;top:0', 'aria-hidden': 'true' });
+    ta.value = t;
+    document.body.append(ta);
+    ta.select();
+    const ok = document.execCommand('copy');
+    ta.remove();
+    return ok;
+  } catch (_) { return false; }
+}
+
+// ---------- command center (its own tab, below Leads) ----------
+let hud = null; // { el, update(status) } while the Command Center tab is open
+let chatIntent = null; // set by the Command Center buttons: the chat tab runs it when it opens
 
 function meter(label, value, lowIsBad) {
   const known = typeof value === 'number';
@@ -424,7 +439,7 @@ function buildHud(actions) {
   const state = h('span', { class: 'hud-state' });
   const grid = h('div', { class: 'hud-grid' });
   const wave = h('div', { class: 'wave', 'aria-hidden': 'true' }, Array.from({ length: 11 }, (_, i) => h('i', { style: 'animation-delay:' + (i * 0.08) + 's' })));
-  const open = prefs.hud !== false && (prefs.hud === true || (window.innerWidth >= 900 && window.innerHeight >= 700));
+  const open = prefs.hud !== false;
   const wrap = h('div', { class: 'hud' + (open ? '' : ' collapsed') });
   const toggle = h('button', { class: 'hud-toggle', type: 'button', 'aria-expanded': String(open), onclick: () => {
     const c = wrap.classList.toggle('collapsed');
@@ -488,6 +503,20 @@ async function refreshHud() {
   try { hud.update(await api('status')); } catch (x) { if (x.status === 401) boot(); }
 }
 
+// ---------- command center tab ----------
+function viewCenter(view) {
+  const toChat = (intent) => { chatIntent = intent; tab = 'chat'; renderView(); };
+  hud = buildHud({
+    talk: () => toChat({ talk: true }),
+    pcStatus: () => toChat({ send: 'Mere PC ka status batao' }),
+    screen: () => toChat({ send: 'Laptop par Claude ke sessions batao: kaun sa kaam chal raha hai aur kahan tak pahuncha' }),
+    newTask: () => toChat({ prefill: 'Task add karo: ' }),
+    stopAll: async () => { for (const p of [...pendingList]) await decide(p.route, p.id, false); refreshHud(); },
+  });
+  page(view, hud.el);
+  refreshHud();
+}
+
 // ---------- chat ----------
 function viewChat(view) {
   const scroll = h('div', { class: 'scroll', 'aria-live': 'polite' });
@@ -501,9 +530,23 @@ function viewChat(view) {
   const clipBtn = h('button', { class: 'icon-btn', type: 'button', 'aria-label': 'Photo ya PDF jodo', title: 'Photo / PDF padhwao (dawai ki parchi, report, sawal)' }, icon('clip'));
   const fileChip = h('div', { class: 'hint', style: 'display:none' });
 
+  let lastQ = ''; // the question the next answer belongs to, so one tap copies both
   const add = (cls, text) => {
     if (empty) { empty.remove(); empty = null; }
-    const m = h('div', { class: 'msg ' + cls }, text);
+    let m;
+    if (cls === 'assistant' && text) {
+      const q = lastQ;
+      const btn = h('button', { class: 'copy-btn', type: 'button', title: 'Sawal aur jawab dono copy karo', 'aria-label': 'Sawal aur jawab copy karo' }, 'Copy');
+      btn.addEventListener('click', async () => {
+        const ok = await copyToClipboard((q ? 'Sawal:\n' + q + '\n\n' : '') + 'Jawab:\n' + text);
+        btn.textContent = ok ? 'Copy ho gaya' : 'Copy nahi hua';
+        setTimeout(() => { btn.textContent = 'Copy'; }, 1800);
+      });
+      m = h('div', { class: 'msg assistant' }, h('div', { class: 'msg-text' }, text), h('div', { class: 'msg-tools' }, btn));
+    } else {
+      m = h('div', { class: 'msg ' + cls }, text);
+      if (cls === 'user') lastQ = text || '';
+    }
     scroll.append(m);
     scroll.scrollTop = scroll.scrollHeight;
     return m;
@@ -572,20 +615,11 @@ function viewChat(view) {
     if ('speechSynthesis' in window) speechSynthesis.cancel();
     if (activeRec) { activeRec.stop(); return; }
     mic.classList.add('live');
-    hud.el.classList.add('listening');
     listen(async (t) => {
       if (!(await tryVoiceDecision(t))) send(t, true); // "haan"/"nahi" answers a waiting approval, anything else is chat
-    }, () => { mic.classList.remove('live'); hud.el.classList.remove('listening'); });
+    }, () => { mic.classList.remove('live'); });
   }
   mic.addEventListener('click', talk);
-
-  hud = buildHud({
-    talk,
-    pcStatus: () => send('Mere PC ka status batao'),
-    screen: () => send('Laptop par Claude ke sessions batao: kaun sa kaam chal raha hai aur kahan tak pahuncha'),
-    newTask: () => { input.value = 'Task add karo: '; input.focus(); fit(); },
-    stopAll: async () => { for (const p of [...pendingList]) await decide(p.route, p.id, false); note('Sab pending cancel kar diye.'); refreshHud(); },
-  });
   spk.addEventListener('click', () => {
     prefs.speak = !prefs.speak;
     savePrefs();
@@ -644,10 +678,17 @@ function viewChat(view) {
   view.append(
     scroll,
     h('div', { class: 'dock' }, h('div', { class: 'col' },
-      h('div', { id: 'pending' }), hud.el, form,
+      h('div', { id: 'pending' }), form,
       h('p', { class: 'hint' }, 'Risky kaam tabhi hote hain jab aap Approve karo. Mic aapke browser ki voice service se chalta hai.'))));
 
+  const intent = chatIntent;
+  chatIntent = null;
   api('chat_history').then(({ messages }) => {
+    if (intent) setTimeout(() => { // after the history is drawn, so the answer lands under it
+      if (intent.talk) talk();
+      else if (intent.send) send(intent.send);
+      else if (intent.prefill) { input.value = intent.prefill; input.focus(); fit(); }
+    }, 50);
     if (!messages.length) {
       empty = h('div', { class: 'empty col' },
         h('h1', { class: 'serif' }, 'Namaste, ' + state.user),
@@ -1010,7 +1051,7 @@ function appsCard() {
 let contentTimer = null;
 
 function copyText(t) {
-  try { navigator.clipboard.writeText(t); } catch (_) { /* clipboard blocked: the text can still be selected by hand */ }
+  copyToClipboard(t);
 }
 
 function reportBox(r) {

@@ -1,5 +1,5 @@
 {
-  "date": "2026-11-02T15:52:46+05:30",
+  "date": "2026-11-02T16:17:48+05:30",
   "suites": {
     "server_test": {
       "tests": 49,
@@ -72,17 +72,9 @@
       "errors": 0,
       "skipped": 0,
       "ok": true
-    },
-    "live_smoke": {
-      "tests": 11,
-      "subchecks": 0,
-      "failures": 0,
-      "errors": 0,
-      "skipped": 0,
-      "ok": true
     }
   },
-  "total_tests": 390,
+  "total_tests": 379,
   "total_subchecks": 33,
   "all_ok": true
 }

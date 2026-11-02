@@ -99,6 +99,9 @@ pre { white-space: pre-wrap; word-break: break-all; background: var(--user); pad
 .msg { margin: 14px 0; white-space: pre-wrap; word-wrap: break-word; }
 .msg.user { background: var(--user); padding: 10px 16px; border-radius: 18px; margin-left: 18%; width: fit-content; max-width: 82%; margin-right: 0; margin-inline-start: auto; }
 .msg.assistant { padding: 0 4px; }
+.msg-tools { margin-top: 4px; }
+.copy-btn { background: transparent; color: var(--muted); border: 1px solid var(--line); border-radius: 999px; font-size: .75rem; font-weight: 500; min-height: 28px; padding: 2px 12px; }
+.copy-btn:hover { color: var(--text); background: var(--user); }
 .msg.note { color: var(--muted); font-size: .9rem; border-left: 3px solid var(--accent); padding-left: 10px; }
 .msg.err { color: var(--danger); border: 1px solid var(--danger); border-radius: 12px; padding: 8px 12px; }
 .typing span { display: inline-block; width: 7px; height: 7px; margin-right: 4px; border-radius: 50%; background: var(--muted); animation: blink 1.2s infinite; }

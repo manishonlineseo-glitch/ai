@@ -197,7 +197,7 @@ Measured: chat → queued median 16 ms (max 33); queued → agent poll returns m
 | Agent | "Laptopai" ONLINE (last seen 9 s before the check), watchdog state `on`, not paused |
 | Updates | live manifest = Windows app 1.2.6, signature present and verified with the key built into the app, file hash matches; the laptop's installed exe has the same hash |
 | Files and secrets | `config.php` mode 600; keys set: Gemini, OpenAI (no credits); no Sapling key saved yet; no secret file reachable from the web (live smoke test) |
-| Web | `app.js?v=28` live with the Content, Quality Gate, Provider Settings and Class views; all new routes answer 401 without a login |
+| Web | `app.js?v=29`: Command Center is its own tab (below Leads); every chat answer has a Copy button (question + answer); Content, Quality Gate, Provider Settings and Class views; all new routes answer 401 without a login |
 | Live smoke tests | 11 of 11 pass; full suite 390 tests (379 offline + 11 live) pass |
 | Server | PHP 8.2.35, SQLite 3.54.1, curl and mbstring present; disk 58% used |
 | Not fine / not done | the Task Scheduler "KeepAlive" task does **not** exist yet (the owner has not run the script); the laptop app still runs on its old token (login not saved); Gemini still times out now and then (last logged 08:31 UTC, 25 s); OpenAI has no credits; the live `data/security.log` does not exist yet because no security event has happened since it was added |
