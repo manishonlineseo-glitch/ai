@@ -46,6 +46,12 @@ function reflex_match(int $userId, string $text): ?array
         return ['reply' => 'Chalu kar diya: agents dobara kaam karenge.', 'actions' => []];
     }
 
+    // "english sikhna hai" / "french sikhni hai" / "spoken english class": ask the trainer the class questions, point to the Class tab
+    if (preg_match('/(spoken english|english (sikh|seekh|class|bolna|speaking)|(american|british|uk|indian) english|angrezi (sikh|seekh|bolna)|(french|german|spanish|japanese|arabic|italian|korean|chinese|russian|tamil|bengali|marathi|gujarati|punjabi|urdu|hindi) (sikh|seekh|class))/u', $t)
+        && preg_match('/sikh|seekh|class|learn|teach|padha/u', $t)) {
+        return ['reply' => "Zaroor, sikhane ka system tayyar hai. Pehle trainer se ye 4 baatein poochh lo:\n1) Kaun sikhega (naam) aur abhi kitna aata hai (kuch nahi / kuch shabd / chhote vakya)?\n2) Class kis time (jaise 07:00) aur kitne minute ki (15 / 30 / 45 / 60) aur kin dino?\n3) American English ya British English (ya koi aur bhasha)?\n4) Kis kaam ke liye (naukri, dukaan, mobile, safar)?\n\n\"Class\" tab kholkar ye bhar do. Phir roz ke aasaan shabd, bolna, likhna, galti sudhaar, diagram aur progress main sambhal lunga; class ke time par yaad bhi dilaunga.", 'actions' => []];
+    }
+
     $pc = online_agent($userId, $t);
     $pcName = $pc ? (string) $pc['name'] : null;
     $target = reflex_target($t); // 'pc' or 'phone': from the words, else the device the owner is speaking from

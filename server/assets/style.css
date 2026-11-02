@@ -194,3 +194,21 @@ details summary { cursor: pointer; color: var(--hud); font-size: .85rem; }
 .item.done .grow { text-decoration: line-through; color: var(--muted); }
 .check { width: 20px; height: 20px; margin: 0; padding: 0; accent-color: var(--accent); }
 @media (min-width: 1500px) { html { font-size: 21px; } .col { max-width: 960px; } }
+
+/* quality gates + language class */
+.tag.bad { color: #b3261e; border-color: #b3261e; }
+.tag.warn { color: #8a6d00; border-color: #8a6d00; }
+.diagram { margin: 10px 0; }
+.diagram svg, svg.dia { width: 100%; height: auto; max-height: 300px; }
+.dia-box { fill: var(--surface); stroke: var(--accent); stroke-width: 1.5; }
+.dia-main { stroke-width: 3; }
+.dia-line { stroke: var(--line); stroke-width: 2; }
+.dia-dot { fill: var(--accent); }
+.dia-arrow { fill: none; stroke: var(--accent); stroke-width: 2; }
+.dia-text { fill: var(--text, currentColor); font-weight: 600; }
+.dia-sub { fill: var(--muted); }
+.bar { fill: var(--accent); }
+.bar-empty { fill: var(--line); }
+.bubble { padding: 8px 12px; border-radius: 14px; margin: 6px 0; max-width: 85%; border: 1px solid var(--line); }
+.bubble.a { margin-right: auto; }
+.bubble.b { margin-left: auto; background: var(--surface); }

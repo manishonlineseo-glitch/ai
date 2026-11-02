@@ -17,6 +17,7 @@ const KNOWLEDGE_HINTS = [
     'video'         => ['video', 'edit', 'editing', 'reel', 'youtube', 'shorts', 'ffmpeg', 'cut', 'subtitle', 'thumbnail', 'premiere', 'capcut', 'footage'],
     'marketing'     => ['marketing', 'launch', 'funnel', 'conversion', 'cro', 'landing page', 'lead', 'growth', 'pricing', 'positioning', 'strategy', 'customer'],
     'business'      => ['business', 'sales', 'startup', 'product', 'finance', 'hiring', 'management', 'okr', 'roadmap', 'revenue', 'negotiation'],
+    'education'     => ['english', 'spoken english', 'sikhna', 'sikhni', 'sikhao', 'sikhaye', 'sikho', 'language', 'bhasha', 'grammar', 'vocabulary', 'pronunciation', 'class', 'teacher', 'tutor', 'american english', 'british english', 'uk english', 'french', 'german', 'spanish', 'learn', 'student', 'lesson', 'words', 'speaking'],
     'communication' => ['reply', 'jawab', 'jawaab', 'customer ko', 'client ko', 'message ka', 'kaise bolu', 'kya bolu', 'bhej', 'whatsapp', 'complaint', 'shikayat', 'draft', 'email likh'],
 ];
 const KNOWLEDGE_STOP = ['the', 'and', 'for', 'with', 'that', 'this', 'from', 'your', 'you', 'are', 'ko', 'ka', 'ki', 'ke', 'hai', 'hain', 'kar', 'karo', 'do', 'de', 'me', 'mein', 'par', 'pe', 'se', 'ek', 'aur', 'or', 'ye', 'wo', 'mujhe', 'mera', 'meri', 'liye', 'bana', 'banao', 'batao', 'kya', 'kaise', 'how', 'what', 'can', 'please', 'jarvis'];

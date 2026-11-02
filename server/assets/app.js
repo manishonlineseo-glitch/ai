@@ -227,7 +227,7 @@ let pendingList = [];
 const announced = new Set();
 let noteHook = null;
 
-const TABS = [['chat', 'Chat'], ['tasks', 'Tasks'], ['report', 'Report'], ['notes', 'Notes'], ['devices', 'Devices'], ['skills', 'Seekha'], ['library', 'Library'], ['leads', 'Leads'], ['content', 'Content']];
+const TABS = [['chat', 'Chat'], ['tasks', 'Tasks'], ['report', 'Report'], ['notes', 'Notes'], ['devices', 'Devices'], ['skills', 'Seekha'], ['library', 'Library'], ['leads', 'Leads'], ['content', 'Content'], ['learn', 'Class']];
 
 function note(text) {
   if (noteHook) noteHook(text);
@@ -280,7 +280,7 @@ function renderView() {
   document.getElementById('title').textContent = TABS.find(([id]) => id === tab)[1];
   const view = document.getElementById('view');
   view.replaceChildren();
-  ({ chat: viewChat, tasks: viewTasks, report: viewReport, notes: viewNotes, devices: viewDevices, skills: viewSkills, library: viewLibrary, leads: viewLeads, content: viewContent })[tab](view);
+  ({ chat: viewChat, tasks: viewTasks, report: viewReport, notes: viewNotes, devices: viewDevices, skills: viewSkills, library: viewLibrary, leads: viewLeads, content: viewContent, learn: viewLearn })[tab](view);
   tick();
 }
 
@@ -1033,6 +1033,353 @@ function fieldWithCopy(label, value, extra) {
       h('button', { type: 'button', class: 'ghost small', onclick: () => copyText(value) }, 'Copy')));
 }
 
+/** replaceChildren that accepts arrays, skips null/false (conditional pieces) and never prints the word "null". */
+function put(box, ...kids) {
+  box.replaceChildren(...kids.flat(Infinity).filter((k) => k != null && k !== false));
+}
+
+// ---------- Content Quality gates (CQO): three real checks, versions, evidence, correction cycles, owner approval ----------
+const GATE_LABELS = { grammar: 'Grammar (85% ya zyada)', ai_detection: 'AI detection (8% ya kam)', plagiarism: 'Plagiarism (bilkul 0%)', factual: 'Tathya / sources check', evidence: 'Provider ka saboot' };
+
+function gateChip(status) {
+  return h('span', { class: 'tag ' + (status === 'PASS' || status === 'APPROVED' ? 'accent' : status === 'FAIL' || status === 'REJECTED' ? 'bad' : 'warn') }, status);
+}
+
+function qualityDashboard() {
+  const box = h('div', { class: 'card' });
+  api('content_quality').then((d) => {
+    const num = (v, s) => (v == null ? 'abhi nahi' : v + (s || ''));
+    put(box, h('p', { class: 'muted' }, 'Content Quality Center: ye sab aankde asli records se aate hain.'),
+      h('div', { class: 'row wrap' }, h('span', { class: 'tag' }, 'Kul: ' + d.total), h('span', { class: 'tag accent' }, 'Approved: ' + d.approved), h('span', { class: 'tag bad' }, 'Rejected: ' + d.rejected),
+        h('span', { class: 'tag warn' }, 'Pending / not verified: ' + d.pending), h('span', { class: 'tag' }, 'Manual review: ' + d.manual_review), h('span', { class: 'tag' }, 'Fail checks: ' + d.failed_checks)),
+      h('div', { class: 'row wrap' }, h('span', { class: 'tag' }, 'Avg grammar: ' + num(d.avg_grammar, '%')), h('span', { class: 'tag' }, 'Avg AI: ' + num(d.avg_ai, '%')), h('span', { class: 'tag' }, 'Avg plagiarism: ' + num(d.avg_plagiarism, '%'))),
+      Object.values(d.providers).map((p) => h('div', { class: 'muted' }, p.name + ': ' + p.state)));
+  }).catch(() => {});
+  return box;
+}
+
+function renderGate(taskId) {
+  const box = h('div', { class: 'card' }, h('p', { class: 'muted' }, 'Quality gate load ho raha hai...'));
+  const msg = h('div', { class: 'error', role: 'alert' });
+
+  async function load(version) {
+    const j = await api('content_gate_get&id=' + taskId + (version ? '&v=' + version : ''));
+    if (!j.gates) { put(box, h('p', { class: 'muted' }, 'Pehle draft taiyar hone do.')); return; }
+    const g = j.gates, doc = j.version.doc, viewing = j.version.version;
+    const run = async (fn) => { msg.textContent = ''; try { await fn(); await load(); } catch (x) { msg.textContent = x.message; await load().catch(() => {}); } };
+    const info = (name) => { const x = g.gates[name]; return x.provider ? x.provider + (x.kind === 'manual' ? ' (aapne daala)' : ' (provider)') + (x.score != null ? ' · ' + x.score : '') + (x.note ? ' · ' + x.note : '') : x.note; };
+    const row = (name, ...controls) => h('div', { class: 'item' }, gateChip(g.gates[name].status),
+      h('div', { class: 'grow' }, GATE_LABELS[name], h('div', { class: 'muted' }, info(name))), ...controls);
+
+    const f = {
+      aiProv: h('input', { placeholder: 'Detector ka naam (ZeroGPT...)', maxlength: 60 }), aiScore: h('input', { type: 'number', min: 0, max: 100, step: '0.1', placeholder: 'AI %' }),
+      aiLang: h('input', { type: 'checkbox', class: 'check', id: 'ailang' + taskId, checked: true }),
+      plProv: h('input', { placeholder: 'Plagiarism checker ka naam', maxlength: 60 }), plScore: h('input', { type: 'number', min: 0, max: 100, step: '0.1', placeholder: 'Raw similarity %' }),
+      plUn: h('input', { type: 'checkbox', class: 'check', id: 'plun' + taskId }),
+      grProv: h('input', { placeholder: 'Grammar tool ka naam (Grammarly...)', maxlength: 60 }), grScore: h('input', { type: 'number', min: 0, max: 100, step: '0.1', placeholder: 'Grammar %' }),
+      factOk: h('input', { type: 'checkbox', class: 'check', id: 'fact' + taskId }), feedback: h('textarea', { rows: 3, placeholder: 'Detector / checker ne kya bataya? (flag hue paragraph, similarity ke sources...)' }),
+    };
+    const srcRows = j.sources.map((s) => ({ ...s }));
+    const srcBox = h('div');
+    const drawSources = () => put(srcBox, srcRows.map((s, i) => h('div', { class: 'row wrap', style: 'margin-bottom:6px' },
+      h('input', { value: s.name, placeholder: 'Source ka naam', onchange: (e) => { s.name = e.target.value; } }), h('input', { value: s.url, placeholder: 'https://...', onchange: (e) => { s.url = e.target.value; } }),
+      h('input', { value: s.info_used, placeholder: 'Kis tathya ke liye', onchange: (e) => { s.info_used = e.target.value; } }),
+      h('select', { onchange: (e) => { s.source_type = e.target.value; } }, ['Official', 'Research', 'News', 'Other'].map((t) => h('option', { value: t, selected: s.source_type === t }, t))),
+      h('select', { onchange: (e) => { s.reliability = e.target.value; } }, ['Verified', 'Needs Review'].map((t) => h('option', { value: t, selected: s.reliability === t }, t))),
+      h('button', { type: 'button', class: 'ghost small', onclick: () => { srcRows.splice(i, 1); drawSources(); } }, 'Hatao'))));
+    drawSources();
+
+    const consent = h('input', { type: 'checkbox', class: 'check', id: 'consent' + taskId, checked: j.consent, onchange: (e) => run(() => api('content_consent', { allowed: e.target.checked })) });
+    const mode = h('select', { 'aria-label': 'Mode', onchange: (e) => run(() => api('content_gate_mode', { id: taskId, mode: e.target.value })) },
+      h('option', { value: 'strict', selected: g.mode === 'strict' }, 'Strict mode (approve ho sakta hai)'), h('option', { value: 'review', selected: g.mode === 'review' }, 'Review mode (sirf report, approve nahi)'));
+
+    put(box, 
+      h('div', { class: 'row wrap' }, h('b', null, 'Version ' + viewing + (viewing !== j.current_version ? ' (purana, sirf dekhne ke liye)' : '')), gateChip(g.status), h('span', { class: 'muted' }, g.label),
+        g.manual_review ? h('span', { class: 'tag bad' }, 'MANUAL REVIEW REQUIRED') : null, mode),
+      h('div', { class: 'row' }, consent, h('label', { for: 'consent' + taskId }, 'Bahari provider allow karo: grammar check ke liye article ka text LanguageTool ko jayega (band rakhoge to text bahar nahi jayega)')),
+      row('grammar', h('button', { class: 'ghost small', onclick: () => run(() => api('content_grammar_run', { id: taskId })) }, 'LanguageTool se check'),
+        h('button', { class: 'ghost small', onclick: () => run(() => api('content_grammar_run', { id: taskId, auto_fix: true })) }, 'Check + auto sudhaar')),
+      h('div', { class: 'row wrap' }, f.grProv, f.grScore, h('button', { class: 'ghost small', onclick: () => run(() => api('content_evidence', { id: taskId, type: 'grammar', provider: f.grProv.value, score: f.grScore.value })) }, 'Apna grammar result daalo')),
+      row('ai_detection'),
+      h('div', { class: 'row wrap' }, f.aiProv, f.aiScore, h('div', { class: 'row' }, f.aiLang, h('label', { for: 'ailang' + taskId }, 'Tool ne is bhasha ko support kiya')),
+        h('button', { class: 'ghost small', onclick: () => run(() => api('content_evidence', { id: taskId, type: 'ai_detection', provider: f.aiProv.value, score: f.aiScore.value, language_supported: f.aiLang.checked })) }, 'AI detector ka asli result daalo')),
+      row('plagiarism'),
+      h('div', { class: 'row wrap' }, f.plProv, f.plScore, h('div', { class: 'row' }, f.plUn, h('label', { for: 'plun' + taskId }, 'Bina shrey ke copy mili')),
+        h('button', { class: 'ghost small', onclick: () => run(() => api('content_evidence', { id: taskId, type: 'plagiarism', provider: f.plProv.value, score: f.plScore.value, unattributed: f.plUn.checked })) }, 'Plagiarism ka asli result daalo')),
+      row('factual'), h('p', { class: 'muted' }, 'Source register (har tathya ka source, link aur tareekh):'), srcBox,
+      h('div', { class: 'row wrap' }, h('button', { type: 'button', class: 'ghost small', onclick: () => { srcRows.push({ name: '', url: '', info_used: '', source_type: 'Other', reliability: 'Needs Review' }); drawSources(); } }, '+ Source'),
+        h('div', { class: 'row' }, f.factOk, h('label', { for: 'fact' + taskId }, 'Maine tathya aur sources check kar liye')),
+        h('button', { class: 'ghost small', onclick: () => run(async () => { await api('content_sources_save', { id: taskId, sources: srcRows.map((s) => ({ ...s, accessed: s.accessed || new Date().toISOString().slice(0, 10) })) }); if (f.factOk.checked) await api('content_evidence', { id: taskId, type: 'factual', confirmed: true }); }) }, 'Sources save + confirm')),
+      row('evidence'),
+      j.grammar_findings.length ? h('div', null, h('p', { class: 'muted' }, 'Grammar provider ne ye milaya:'), j.grammar_findings.slice(0, 8).map((x) => h('div', { class: 'muted' }, '• ' + x.context + ' → ' + x.message + (x.suggest.length ? ' (' + x.suggest.join(' / ') + ')' : '')))) : null,
+      h('h2', null, 'Sudhaar (' + g.cycles + '/3 cycle)'), f.feedback,
+      h('div', { class: 'row wrap', style: 'margin-top:8px' }, h('button', { disabled: g.cycles >= 3, onclick: () => run(() => api('content_revise', { id: taskId, feedback: f.feedback.value })) }, 'Sudhaar cycle chalao (naya version banega)'),
+        viewing !== j.current_version ? h('button', { class: 'ghost', onclick: () => run(() => api('content_save_version', { id: taskId, body: doc.body, reason: 'Version ' + viewing + ' par wapas' })) }, 'Is version par wapas jao') : null),
+      h('h2', null, 'Owner approval'),
+      h('div', { class: 'row wrap' },
+        g.can_approve && !g.owner_approved ? h('button', { onclick: () => run(() => api('content_approve', { id: taskId, step: 'approve' })) }, 'Maine dekh liya: approve karo') : null,
+        g.owner_approved && !g.publish_authorized ? h('button', { onclick: () => { if (confirm('Publish allow? (Sirf record hoga, Jarvis kahin kuch nahi bhejta.)')) run(() => api('content_approve', { id: taskId, step: 'authorize_publish' })); } }, 'Publish allow karo (sirf record)') : null,
+        g.owner_approved ? h('button', { class: 'ghost', onclick: () => run(() => api('content_approve', { id: taskId, step: 'revoke' })) }, 'Approval wapas lo') : null,
+        g.publish_authorized ? h('span', { class: 'tag accent' }, 'PUBLISH AUTHORIZED (kuch bheja nahi gaya)') : null,
+        !g.can_approve && !g.owner_approved ? h('span', { class: 'muted' }, g.mode !== 'strict' ? 'Review mode me approve nahi hota.' : 'Approve tab hoga jab sab zaroori jaanch PASS ho.') : null),
+      h('h2', null, 'Versions (koi delete nahi hota)'),
+      j.versions.map((v) => h('div', { class: 'item' }, h('div', { class: 'grow' }, 'v' + v.version + ' · ' + v.reason, h('div', { class: 'muted' }, timeAgo(v.created_at))),
+        h('button', { class: 'ghost small', onclick: () => load(v.version) }, 'Dekho'))),
+      h('h2', null, 'Audit'), j.audit.slice(0, 10).map((a) => h('div', { class: 'muted' }, timeAgo(a.created_at) + ' · ' + a.action + ' · ' + a.detail)), msg);
+  }
+  load().catch((x) => { put(box, h('p', { class: 'error' }, x.message)); });
+  return box;
+}
+
+// ---------- Class tab: language tutor (learners, daily lesson, speaking + writing practice, revision quiz, progress) ----------
+const LEARN_LANGS = ['English', 'French', 'German', 'Spanish', 'Hindi', 'Arabic', 'Japanese', 'Tamil', 'Other'];
+const LEARN_LEVELS = { A0: 'Kuch nahi aata', A1: 'Kuch shabd aate hain', A2: 'Chhote vakya bol leta hai', B1: 'Baat-cheet kar leta hai', B2: 'Achha bolta hai', C1: 'Bahut achha' };
+const LEARN_DAYS = [['mon', 'Som'], ['tue', 'Mangal'], ['wed', 'Budh'], ['thu', 'Guru'], ['fri', 'Shukra'], ['sat', 'Shani'], ['sun', 'Ravi']];
+const SVGNS = 'http://www.w3.org/2000/svg';
+
+function svgEl(name, attrs, text) {
+  const e = document.createElementNS(SVGNS, name);
+  for (const [k, v] of Object.entries(attrs || {})) e.setAttribute(k, String(v));
+  if (text != null) e.textContent = text;
+  return e;
+}
+
+/** Draws a lesson diagram from the validated data (boxes / flow / timeline / map). Text goes in through textContent only. */
+function drawDiagram(spec) {
+  const items = spec.items || [];
+  const W = 120, H = 56, GAP = 38, PER = 4;
+  let svg;
+  const label = (x, y, t, cls, size) => svgEl('text', { x, y, 'text-anchor': 'middle', class: cls, 'font-size': size || 13 }, t.length > 16 ? t.slice(0, 15) + '…' : t);
+  if (spec.type === 'timeline') {
+    const w = Math.max(items.length * 130, 300);
+    svg = svgEl('svg', { viewBox: `0 0 ${w} 120`, class: 'dia' });
+    svg.append(svgEl('line', { x1: 20, y1: 60, x2: w - 20, y2: 60, class: 'dia-line' }));
+    items.forEach((it, i) => {
+      const x = 40 + i * ((w - 80) / Math.max(items.length - 1, 1));
+      svg.append(svgEl('circle', { cx: x, cy: 60, r: 7, class: 'dia-dot' }), label(x, 38, it.label, 'dia-text', 14), label(x, 88, it.sub, 'dia-sub', 12));
+    });
+  } else if (spec.type === 'map') {
+    svg = svgEl('svg', { viewBox: '0 0 360 260', class: 'dia' });
+    const c = items[0];
+    const rest = items.slice(1);
+    rest.forEach((it, i) => {
+      const a = (Math.PI * 2 * i) / Math.max(rest.length, 1) - Math.PI / 2;
+      const x = 180 + Math.cos(a) * 125, y = 130 + Math.sin(a) * 90;
+      svg.append(svgEl('line', { x1: 180, y1: 130, x2: x, y2: y, class: 'dia-line' }), svgEl('rect', { x: x - 52, y: y - 22, width: 104, height: 44, rx: 10, class: 'dia-box' }),
+        label(x, y - 2, it.label, 'dia-text'), label(x, y + 14, it.sub, 'dia-sub', 11));
+    });
+    svg.append(svgEl('rect', { x: 130, y: 105, width: 100, height: 50, rx: 12, class: 'dia-box dia-main' }), label(180, 127, c.label, 'dia-text', 15), label(180, 144, c.sub, 'dia-sub', 11));
+  } else {
+    const rows = Math.ceil(items.length / PER);
+    const perRow = Math.min(items.length, PER);
+    svg = svgEl('svg', { viewBox: `0 0 ${perRow * (W + GAP)} ${rows * (H + 30)}`, class: 'dia' });
+    items.forEach((it, i) => {
+      const r = Math.floor(i / PER), col = i % PER;
+      const x = col * (W + GAP) + 4, y = r * (H + 30) + 6;
+      svg.append(svgEl('rect', { x, y, width: W, height: H, rx: 10, class: 'dia-box' }), label(x + W / 2, y + 24, it.label, 'dia-text', 15), label(x + W / 2, y + 43, it.sub, 'dia-sub', 11));
+      if (col < PER - 1 && i < items.length - 1) {
+        const mx = x + W + GAP / 2;
+        svg.append(spec.type === 'flow'
+          ? svgEl('path', { d: `M${x + W + 6} ${y + H / 2} h${GAP - 12} m-6 -5 l6 5 l-6 5`, class: 'dia-arrow' })
+          : svgEl('text', { x: mx, y: y + H / 2 + 6, 'text-anchor': 'middle', class: 'dia-text', 'font-size': 20 }, '+'));
+      }
+    });
+  }
+  return h('div', { class: 'diagram' }, spec.title ? h('div', { class: 'muted' }, spec.title) : null, svg);
+}
+
+/** 14-day bars: height = average score of that day, empty days are faint. */
+function drawProgress(days) {
+  const keys = Object.keys(days);
+  const svg = svgEl('svg', { viewBox: '0 0 420 130', class: 'dia' });
+  svg.append(svgEl('line', { x1: 10, y1: 100, x2: 410, y2: 100, class: 'dia-line' }));
+  keys.forEach((d, i) => {
+    const x = 14 + i * 28, v = days[d];
+    const hh = v.avg == null ? 3 : Math.max(4, (v.avg / 100) * 90);
+    const bar = svgEl('rect', { x, y: 100 - hh, width: 20, height: hh, rx: 4, class: v.avg == null ? 'bar-empty' : 'bar' });
+    bar.append(svgEl('title', {}, d + (v.avg == null ? ': kuch nahi kiya' : ': ' + v.n + ' practice, average ' + v.avg)));
+    svg.append(bar, svgEl('text', { x: x + 10, y: 118, 'text-anchor': 'middle', class: 'dia-sub', 'font-size': 10 }, d.slice(8)));
+  });
+  return h('div', { class: 'diagram' }, svg);
+}
+
+function tutorSay(text, lang, rate) {
+  try {
+    speechSynthesis.cancel();
+    const u = new SpeechSynthesisUtterance(text);
+    u.lang = lang;
+    u.rate = rate || 0.85;
+    const voice = speechSynthesis.getVoices().find((v) => v.lang === lang) || speechSynthesis.getVoices().find((v) => v.lang.startsWith(lang.slice(0, 2)));
+    if (voice) u.voice = voice;
+    speechSynthesis.speak(u);
+  } catch (_) { /* no speech on this device */ }
+}
+
+function tutorListen(lang, onText, onFail) {
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SR) { onFail('Is browser me bolkar jawab dene ki suvidha nahi hai (Chrome use karo). Likh kar bhi practice ho sakti hai.'); return; }
+  const rec = new SR();
+  rec.lang = lang;
+  rec.interimResults = false;
+  rec.maxAlternatives = 1;
+  rec.onresult = (e) => onText(e.results[0][0].transcript);
+  rec.onerror = (e) => onFail(e.error === 'not-allowed' ? 'Mic ki ijazat do (browser me mic allow karo).' : 'Awaaz samajh nahi aayi, dobara bolo.');
+  rec.start();
+}
+
+function feedbackBox(fb) {
+  return h('div', { class: 'card' },
+    h('p', { class: 'tag accent' }, 'Score: ' + fb.score + '/100'),
+    fb.praise ? h('p', null, fb.praise) : null,
+    h('p', null, h('b', null, 'Sahi vakya: '), fb.corrected),
+    fb.mistakes.map((m) => h('div', { class: 'item' }, h('div', { class: 'grow' }, h('span', { class: 'error' }, m.wrong), ' → ', h('b', null, m.right), h('div', { class: 'muted' }, m.why)))),
+    fb.better.length ? h('p', { class: 'muted' }, 'Aur tareeke: ' + fb.better.join(' | ')) : null,
+    fb.next_tip ? h('p', { class: 'muted' }, 'Kal ke liye: ' + fb.next_tip) : null);
+}
+
+function viewLearn(view) {
+  let learners = [];
+  let current = null;
+  let editing = null; // null = list, 0 = new, id = edit
+  const msg = h('div', { class: 'error', role: 'alert' });
+  const area = h('div');
+
+  async function loadList() {
+    const r = await api('learn_learners');
+    learners = r.learners;
+    draw();
+  }
+
+  function learnerForm(l) {
+    const f = {
+      name: h('input', { maxlength: 60, value: l ? l.name : '', placeholder: 'Sikhne wale ka naam', 'aria-label': 'Naam' }),
+      native: h('input', { maxlength: 30, value: l ? l.native : 'Hindi', 'aria-label': 'Pehli bhasha' }),
+      target: h('select', { 'aria-label': 'Kya seekhna hai' }, LEARN_LANGS.map((x) => h('option', { value: x, selected: l ? (LEARN_LANGS.includes(l.target) ? l.target === x : x === 'Other') : x === 'English' }, x))),
+      other: h('input', { maxlength: 30, placeholder: 'Bhasha ka naam', value: l && !LEARN_LANGS.includes(l.target) ? l.target : '', 'aria-label': 'Dusri bhasha' }),
+      variant: h('input', { maxlength: 30, value: l ? l.variant : 'American', placeholder: 'American / British / Indian / Australian (English ke liye)', 'aria-label': 'Accent' }),
+      level: h('select', { 'aria-label': 'Level' }, Object.entries(LEARN_LEVELS).map(([k, v]) => h('option', { value: k, selected: (l ? l.level : 'A0') === k }, k + ': ' + v))),
+      goal: h('input', { maxlength: 200, value: l ? l.goal : '', placeholder: 'Kis kaam ke liye: dukaan, naukri, mobile, safar...', 'aria-label': 'Maksad' }),
+      time: h('input', { type: 'time', value: l ? l.class_time : '07:00', 'aria-label': 'Class ka time' }),
+      minutes: h('select', { 'aria-label': 'Class kitne minute' }, [15, 20, 30, 45, 60, 90].map((m) => h('option', { value: m, selected: (l ? l.class_minutes : 30) === m }, m + ' minute'))),
+    };
+    const picked = new Set(l ? l.class_days.split(',').filter(Boolean) : ['mon', 'tue', 'wed', 'thu', 'fri', 'sat']);
+    const dayBoxes = LEARN_DAYS.map(([k, label]) => h('label', { class: 'row', style: 'gap:4px' },
+      h('input', { type: 'checkbox', class: 'check', checked: picked.has(k), onchange: (e) => { e.target.checked ? picked.add(k) : picked.delete(k); } }), label));
+    return h('form', { class: 'card', onsubmit: async (e) => {
+      e.preventDefault();
+      msg.textContent = '';
+      try {
+        await api('learn_learner_save', { id: l ? l.id : 0, name: f.name.value, native: f.native.value, target: f.target.value === 'Other' ? f.other.value : f.target.value, variant: f.variant.value,
+          level: f.level.value, goal: f.goal.value, class_time: f.time.value, class_minutes: Number(f.minutes.value), class_days: [...picked] });
+        editing = null;
+        loadList();
+      } catch (x) { msg.textContent = x.message; }
+    } },
+      h('p', { class: 'muted' }, 'Pehle trainer se poochho: kaun sikhega aur abhi kitna aata hai? Class kis time aur kitne minute ki karoge, kin dino? American ya British English (ya koi aur bhasha)? Kis kaam ke liye? Phir yahan bharo.'),
+      h('label', null, 'Naam'), f.name, h('label', null, 'Pehli bhasha (jisme samjhana hai)'), f.native,
+      h('div', { class: 'row wrap' }, h('div', { class: 'grow' }, h('label', null, 'Kya seekhna hai'), f.target), h('div', { class: 'grow' }, h('label', null, 'Agar "Other" to naam'), f.other)),
+      h('label', null, 'Accent / variety'), f.variant, h('label', null, 'Abhi kitna aata hai'), f.level, h('label', null, 'Maksad'), f.goal,
+      h('div', { class: 'row wrap' }, h('div', { class: 'grow' }, h('label', null, 'Class ka time'), f.time), h('div', { class: 'grow' }, h('label', null, 'Class kitne minute ki'), f.minutes)),
+      h('label', null, 'Kin dino'), h('div', { class: 'row wrap' }, dayBoxes), msg,
+      h('div', { class: 'row wrap' }, h('button', { type: 'submit' }, 'Save'), h('button', { type: 'button', class: 'ghost', onclick: () => { editing = null; draw(); } }, 'Cancel')));
+  }
+
+  function draw() {
+    if (editing !== null) { put(area, learnerForm(editing ? learners.find((x) => x.id === editing) : null)); return; }
+    if (current) { openClass(current); return; }
+    put(area, 
+      ...learners.map((l) => h('div', { class: 'card' },
+        h('h2', null, l.name),
+        h('div', { class: 'muted' }, l.target + (l.variant ? ' (' + l.variant + ')' : '') + ' · level ' + l.level + ' · ' + (l.class_minutes ? 'class ' + l.class_time + ', ' + l.class_minutes + ' minute' : 'class ka time tay nahi')),
+        h('div', { class: 'muted' }, 'Streak: ' + l.streak + ' din · shabd: ' + l.words_total + ' · revision baaki: ' + l.due_now),
+        h('div', { class: 'row wrap', style: 'margin-top:8px' },
+          h('button', { onclick: () => { current = l; draw(); } }, 'Aaj ki class shuru karo'),
+          h('button', { class: 'ghost', onclick: () => { editing = l.id; draw(); } }, 'Edit'),
+          h('button', { class: 'ghost danger', onclick: async () => { if (confirm(l.name + ' ko hata dein? Iska poora record jayega.')) { await api('learn_learner_delete', { id: l.id }); loadList(); } } }, 'Hatao')))),
+      learners.length ? null : h('p', { class: 'muted' }, 'Abhi koi learner nahi hai. Neeche se naya jodo.'),
+      h('button', { onclick: () => { editing = 0; draw(); } }, '+ Naya learner'));
+  }
+
+  async function openClass(l) {
+    const box = h('div', null, h('p', { class: 'muted' }, 'Aaj ka lesson ban raha hai... (pehli baar 20-40 second lagte hain)'));
+    put(area, h('button', { class: 'ghost', onclick: () => { current = null; loadList(); } }, '← Sab learners'), h('h2', null, l.name + ' ki class'), box);
+    let data;
+    try { data = await api('learn_lesson&id=' + l.id); } catch (x) { put(box, h('p', { class: 'error' }, x.message)); return; }
+    const L = data.lesson, lang = data.learner.tts_lang;
+    const feedback = h('div');
+    const practise = async (kind, prompt, answer) => {
+      put(feedback, h('p', { class: 'muted' }, 'Check ho raha hai...'));
+      try { put(feedback, feedbackBox(await api('learn_correct', { id: l.id, kind, prompt, answer }))); loadProgress(); } catch (x) { put(feedback, h('p', { class: 'error' }, x.message)); }
+    };
+    const speakAnswer = (prompt) => tutorListen(lang, (t) => { put(feedback, h('p', null, 'Maine suna: ', h('b', null, t))); practise('speaking', prompt, t); }, (m) => put(feedback, h('p', { class: 'error' }, m)));
+    const writing = h('textarea', { rows: 3, placeholder: 'Yahan likho...', 'aria-label': 'Likhna' });
+    const quizBox = h('div');
+    const progBox = h('div', { class: 'card' });
+
+    async function loadProgress() {
+      try {
+        const p = await api('learn_progress&id=' + l.id);
+        put(progBox, h('h2', null, 'Progress'),
+          h('div', { class: 'row wrap' }, h('span', { class: 'tag accent' }, 'Streak: ' + p.streak + ' din'), h('span', { class: 'tag' }, 'Shabd: ' + p.words_total), h('span', { class: 'tag' }, 'Pakke: ' + p.mastered),
+            h('span', { class: 'tag' }, 'Revision baaki: ' + p.due_now), h('span', { class: 'tag' }, p.accuracy_7d == null ? 'Accuracy: abhi nahi' : 'Accuracy (7 din): ' + p.accuracy_7d + '%')),
+          drawProgress(p.days),
+          p.repeat_mistakes.length ? h('p', { class: 'muted' }, 'Baar-baar hone wali galtiyan: ' + p.repeat_mistakes.join(' | ')) : null);
+      } catch (_) { /* shown next time */ }
+    }
+
+    async function startQuiz() {
+      const { questions } = await api('learn_quiz&id=' + l.id);
+      if (!questions.length) { put(quizBox, h('p', { class: 'muted' }, 'Abhi koi shabd revision ke liye baaki nahi. Shabaash!')); return; }
+      let i = 0, right = 0;
+      const next = () => {
+        if (i >= questions.length) { put(quizBox, h('p', { class: 'tag accent' }, right + '/' + questions.length + ' sahi. Kal phir milte hain!')); loadProgress(); return; }
+        const q = questions[i];
+        const result = h('div', { class: 'muted' });
+        put(quizBox, h('div', { class: 'row' }, h('b', { style: 'font-size:1.4rem' }, q.word), q.pron ? h('span', { class: 'muted' }, ' (' + q.pron + ')') : null,
+          h('button', { class: 'ghost small', onclick: () => tutorSay(q.word, lang) }, 'Suno')),
+          h('p', { class: 'muted' }, 'Iska matlab kya hai?'),
+          q.choices.map((c) => h('button', { class: 'ghost', style: 'display:block;width:100%;margin:6px 0', onclick: async (e) => {
+            [...quizBox.querySelectorAll('button')].forEach((b) => { b.disabled = true; });
+            const r = await api('learn_quiz_answer', { id: l.id, word_id: q.id, choice: c });
+            right += r.correct ? 1 : 0;
+            result.textContent = r.correct ? 'Sahi! Ye shabd ' + r.next_in_days + ' din baad phir poochha jayega.' : 'Galat. Sahi jawab: ' + r.answer + '. Ye kal phir aayega.';
+            result.className = r.correct ? 'tag accent' : 'error';
+            quizBox.append(h('button', { style: 'margin-top:8px', onclick: () => { i++; next(); } }, 'Aage'));
+          } }, c)), result);
+      };
+      next();
+    }
+
+    put(box, 
+      h('div', { class: 'card' }, h('h2', null, L.title), L.theme ? h('p', { class: 'tag' }, 'Aaj ka theme: ' + L.theme) : null, L.diagram ? drawDiagram(L.diagram) : null, L.tip ? h('p', { class: 'muted' }, 'Tip: ' + L.tip) : null),
+      h('h2', null, 'Aaj ke 10 shabd'),
+      h('div', { class: 'card' }, L.words.map((w) => h('div', { class: 'item' },
+        h('div', { class: 'grow' }, h('b', { style: 'font-size:1.15rem' }, w.word), ' ', h('span', { class: 'muted' }, w.pron ? '(' + w.pron + ')' : ''), h('div', null, w.meaning),
+          w.example ? h('div', { class: 'muted' }, w.example + (w.example_meaning ? ' = ' + w.example_meaning : '')) : null),
+        h('button', { class: 'ghost small', onclick: () => tutorSay(w.word, lang) }, 'Suno'),
+        h('button', { class: 'ghost small', onclick: () => speakAnswer('Say the word: ' + w.word) }, 'Bolo')))),
+      h('h2', null, 'Bolne ke vakya (suno, phir bolo)'),
+      h('div', { class: 'card' }, L.sentences.map((s) => h('div', { class: 'item' },
+        h('div', { class: 'grow' }, h('b', null, s.text), s.pron ? h('div', { class: 'muted' }, s.pron) : null, h('div', null, s.meaning)),
+        h('button', { class: 'ghost small', onclick: () => tutorSay(s.text, lang) }, 'Suno'),
+        h('button', { class: 'ghost small', onclick: () => speakAnswer('Say: ' + s.text) }, 'Bolo')))),
+      h('h2', null, 'Chhoti baat-cheet'),
+      h('div', { class: 'card' }, L.dialogue.map((d) => h('div', { class: 'bubble ' + (d.who === 'A' ? 'a' : 'b') }, h('b', null, d.who + ': '), d.text, d.meaning ? h('div', { class: 'muted' }, d.meaning) : null)),
+        h('button', { class: 'ghost small', onclick: () => tutorSay(L.dialogue.map((d) => d.text).join('. '), lang, 0.8) }, 'Poori baat-cheet suno')),
+      h('h2', null, 'Likhne ki practice'), h('div', { class: 'card' }, h('p', null, L.writing_task), writing,
+        h('div', { class: 'row wrap', style: 'margin-top:8px' }, h('button', { onclick: () => practise('writing', L.writing_task, writing.value) }, 'Check karo'))),
+      h('h2', null, 'Bolne ki practice'), h('div', { class: 'card' }, h('p', null, L.speaking_task),
+        h('div', { class: 'row wrap' }, h('button', { onclick: () => speakAnswer(L.speaking_task) }, 'Bolna shuru karo'))),
+      feedback,
+      h('h2', null, 'Revision'), h('div', { class: 'card' }, h('button', { onclick: startQuiz }, 'Purane shabdon ki revision shuru karo'), quizBox),
+      progBox);
+    loadProgress();
+  }
+
+  page(view, h('h2', null, 'Class: bhasha sikhna (roz thoda, aasaan shabdon se)'), area);
+  loadList().catch((x) => { msg.textContent = x.message; });
+}
+
 function viewContent(view) {
   clearInterval(contentTimer);
   let selected = 0;
@@ -1119,7 +1466,8 @@ function viewContent(view) {
         h('button', { type: 'button', onclick: () => copyText(body.value) }, 'Article copy karo'),
         h('button', { type: 'button', class: 'ghost', onclick: recheck }, 'Dobara check'),
         h('a', { class: 'btn ghost', href: 'https://www.zerogpt.com/', target: '_blank', rel: 'noopener noreferrer', onclick: () => copyText(body.value) }, 'ZeroGPT kholo (article copy ho jayega)')),
-      h('h2', null, 'Check report'), out));
+      h('h2', null, 'Check report'), out,
+      h('h2', null, 'Quality Gate (CQO): asli jaanch aur approval'), renderGate(task.id)));
   }
 
   // --- 2. own text
@@ -1156,6 +1504,7 @@ function viewContent(view) {
 
   page(view,
     h('h2', null, 'Naya content likhwao'), h('div', { class: 'card' }, newForm),
+    h('h2', null, 'Content Quality Center'), qualityDashboard(),
     h('h2', null, 'Mere content'), listBox, detailBox,
     h('h2', null, 'Apna text check karo'), h('div', { class: 'card' }, ownForm, ownOut),
     h('h2', null, 'Content rules (aapki file)'), rulesCard);

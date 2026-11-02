@@ -22,6 +22,7 @@ HDR = {"X-Requested-With": "jarvis"}
 TMP = None
 PROC = None
 DB = None
+EXTRA_CONFIG = {}  # extra config.php keys for one test module (set before start_server)
 
 
 def start_server():
@@ -31,7 +32,8 @@ def start_server():
     shutil.copytree(os.path.join(ROOT, "server"), site, ignore=shutil.ignore_patterns("config.php", "*.sqlite*", "*.log", "library", ".git"))
     DB = os.path.join(TMP, "test.sqlite")
     with open(os.path.join(site, "config.php"), "w", encoding="utf-8") as f:
-        f.write("<?php return ['require_https'=>false,'db_path'=>" + json.dumps(DB) + ",'timezone'=>'Asia/Kolkata','brain'=>'laptop','chat_rate_per_min'=>40];")
+        f.write("<?php return array_merge(['require_https'=>false,'db_path'=>" + json.dumps(DB) + ",'timezone'=>'Asia/Kolkata','brain'=>'laptop','chat_rate_per_min'=>40], json_decode("
+                + json.dumps(json.dumps(EXTRA_CONFIG)) + ", true));")
     os.makedirs(os.path.join(site, "data"), exist_ok=True)
     PROC = subprocess.Popen(["php", "-S", f"127.0.0.1:{PORT}", "-t", site], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     for _ in range(50):
@@ -67,6 +69,7 @@ def post(route, body=None, session=None, headers=None):
 def sql(query, args=()):
     con = sqlite3.connect(DB, timeout=10)
     try:
+        con.execute("PRAGMA foreign_keys = ON")  # like the server: deleting a parent row deletes its children
         cur = con.execute(query, args)
         con.commit()
         return cur.fetchall()

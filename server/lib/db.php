@@ -1,7 +1,7 @@
 <?php
 declare(strict_types=1);
 
-const SCHEMA_VERSION = 11;
+const SCHEMA_VERSION = 12;
 
 /**
  * A single-value read (COUNT(*), MAX(id)...) leaves the statement open until it is reset, and in SQLite an open read keeps
@@ -141,9 +141,115 @@ function db_fetch(PDOStatement $st): ?array
     return $row ?: null;
 }
 
+/** v12: Content Quality & Originality records and the language tutor. Additive only. */
+function migrate_v12(PDO $pdo): void
+{
+    $pdo->exec('
+        CREATE TABLE IF NOT EXISTS content_versions (
+            id INTEGER PRIMARY KEY,
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            task_id INTEGER NOT NULL,
+            version INTEGER NOT NULL,
+            doc TEXT NOT NULL,
+            reason TEXT NOT NULL DEFAULT "",
+            created_at INTEGER NOT NULL,
+            UNIQUE(task_id, version)
+        );
+        CREATE TABLE IF NOT EXISTS content_checks (
+            id INTEGER PRIMARY KEY,
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            task_id INTEGER NOT NULL,
+            version INTEGER NOT NULL,
+            check_type TEXT NOT NULL,
+            provider TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            score REAL,
+            status TEXT NOT NULL,
+            language TEXT NOT NULL DEFAULT "",
+            detail TEXT NOT NULL DEFAULT "{}",
+            raw TEXT NOT NULL DEFAULT "",
+            started_at INTEGER NOT NULL,
+            finished_at INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_cchecks ON content_checks(task_id, version);
+        CREATE TABLE IF NOT EXISTS content_sources (
+            id INTEGER PRIMARY KEY,
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            task_id INTEGER NOT NULL,
+            name TEXT NOT NULL,
+            url TEXT NOT NULL DEFAULT "",
+            accessed TEXT NOT NULL DEFAULT "",
+            info_used TEXT NOT NULL DEFAULT "",
+            source_type TEXT NOT NULL DEFAULT "Other",
+            reliability TEXT NOT NULL DEFAULT "Needs Review"
+        );
+        CREATE TABLE IF NOT EXISTS content_audit (
+            id INTEGER PRIMARY KEY,
+            user_id INTEGER NOT NULL,
+            task_id INTEGER NOT NULL,
+            action TEXT NOT NULL,
+            detail TEXT NOT NULL DEFAULT "",
+            created_at INTEGER NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS learners (
+            id INTEGER PRIMARY KEY,
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            name TEXT NOT NULL,
+            native TEXT NOT NULL DEFAULT "Hindi",
+            target TEXT NOT NULL DEFAULT "English",
+            variant TEXT NOT NULL DEFAULT "American",
+            tts_lang TEXT NOT NULL DEFAULT "en-US",
+            level TEXT NOT NULL DEFAULT "A0",
+            goal TEXT NOT NULL DEFAULT "",
+            class_time TEXT NOT NULL DEFAULT "",
+            class_minutes INTEGER NOT NULL DEFAULT 0,
+            class_days TEXT NOT NULL DEFAULT "",
+            last_reminder TEXT NOT NULL DEFAULT "",
+            created_at INTEGER NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS learn_words (
+            id INTEGER PRIMARY KEY,
+            learner_id INTEGER NOT NULL REFERENCES learners(id) ON DELETE CASCADE,
+            word TEXT NOT NULL,
+            meaning TEXT NOT NULL DEFAULT "",
+            pron TEXT NOT NULL DEFAULT "",
+            example TEXT NOT NULL DEFAULT "",
+            box INTEGER NOT NULL DEFAULT 1,
+            next_due INTEGER NOT NULL DEFAULT 0,
+            seen INTEGER NOT NULL DEFAULT 0,
+            correct INTEGER NOT NULL DEFAULT 0,
+            wrong INTEGER NOT NULL DEFAULT 0,
+            created_at INTEGER NOT NULL,
+            UNIQUE(learner_id, word)
+        );
+        CREATE TABLE IF NOT EXISTS learn_lessons (
+            id INTEGER PRIMARY KEY,
+            learner_id INTEGER NOT NULL REFERENCES learners(id) ON DELETE CASCADE,
+            day TEXT NOT NULL,
+            content TEXT NOT NULL,
+            created_at INTEGER NOT NULL,
+            UNIQUE(learner_id, day)
+        );
+        CREATE TABLE IF NOT EXISTS learn_attempts (
+            id INTEGER PRIMARY KEY,
+            learner_id INTEGER NOT NULL REFERENCES learners(id) ON DELETE CASCADE,
+            kind TEXT NOT NULL,
+            prompt TEXT NOT NULL DEFAULT "",
+            answer TEXT NOT NULL DEFAULT "",
+            corrected TEXT NOT NULL DEFAULT "",
+            feedback TEXT NOT NULL DEFAULT "{}",
+            score INTEGER NOT NULL DEFAULT 0,
+            day TEXT NOT NULL,
+            created_at INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_lattempts ON learn_attempts(learner_id, day);
+    ');
+}
+
 function migrate(PDO $pdo): void
 {
     migrate_tables($pdo);
+    migrate_v12($pdo);
     $pdo->exec('
         CREATE TABLE IF NOT EXISTS campaigns (
             id INTEGER PRIMARY KEY,

@@ -194,6 +194,15 @@ function task_execute(array $task): void
             $w = content_write($uid, $topic);
             $d = $w['doc'];
             $r = $w['result'];
+            $st0 = cq_state($id);
+            if (preg_match('/^Language:\s*(.+)$/mu', (string) $task['details'], $lm)) {
+                $st0['language'] = trim($lm[1]);
+            }
+            if (preg_match('/^Accent:\s*(.+)$/mu', (string) $task['details'], $am)) {
+                $st0['accent'] = trim($am[1]);
+            }
+            cq_state_save($id, $st0);
+            cq_version_add($uid, $id, $d, 'Draft by Jarvis (' . $w['rounds'] . ' writer round' . ($w['rounds'] > 1 ? 's' : '') . ')');
             kv_set('content_result_' . $id, json_encode(['doc' => ['focus_keyword' => $d['focus_keyword'], 'seo_title' => $d['seo_title'], 'meta_description' => $d['meta_description'],
                 'slug' => $d['slug'], 'body' => $d['body']], 'pass' => $r['pass'], 'rounds' => $w['rounds'], 'words' => $r['words'], 'checks' => $r['checks'],
                 'failed' => $r['failed'], 'manual' => $r['manual'], 'trace' => $w['trace'], 'at' => time()], JSON_UNESCAPED_UNICODE));
@@ -351,6 +360,9 @@ function scheduler_run(): array
             $ran[] = 'db_backup';
         }
         agents_watchdog();
+        if (tutor_reminders()) {
+            $ran[] = 'class_reminder';
+        }
         foreach ($pdo->query('SELECT id FROM users')->fetchAll(PDO::FETCH_COLUMN) as $uid) {
             $uid = (int) $uid;
             routines_seed($uid);

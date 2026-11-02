@@ -58,7 +58,8 @@ function content_build_brief(array $in): string
     $lang = in_array($in['language'] ?? '', ['English', 'Hinglish', 'Hindi'], true) ? $in['language'] : 'English';
     $words = min(max((int) ($in['words'] ?? 900), 300), 2500);
     $pages = array_slice(array_filter(array_map('trim', preg_split('/\R+/u', $clean('pages', 800)) ?: [])), 0, 8);
-    $lines = ['Brand: ' . ($clean('brand', 80) ?: 'Wisi Pay'), 'Language: ' . $lang, 'Focus keyword: ' . ($clean('focus_keyword', 80) ?: '(choose a good 2-4 word focus keyphrase from the topic)'),
+    $accent = in_array($in['accent'] ?? '', ['American', 'British'], true) ? $in['accent'] : 'American';
+    $lines = ['Brand: ' . ($clean('brand', 80) ?: 'Wisi Pay'), 'Language: ' . $lang, 'Accent: ' . $accent . ($lang === 'English' ? ' English spelling' : ''), 'Focus keyword: ' . ($clean('focus_keyword', 80) ?: '(choose a good 2-4 word focus keyphrase from the topic)'),
         'Topic: ' . $topic, 'Audience: ' . ($clean('audience', 200) ?: 'the brand\'s customers'), 'Target length: about ' . $words . ' words'];
     if ($pages) {
         $lines[] = 'INTERNAL PAGES to link: ' . implode(', ', $pages);
@@ -355,7 +356,7 @@ function content_check(array $doc): array
         'failed' => $failed,
         'advice' => $advice,
         'words'  => $wc,
-        'manual' => ['Grammar and spelling (read it once)', 'Plagiarism under 1% (run your plagiarism checker)', 'ZeroGPT / AI-detector score (paste it in yourself; no tool here can call it)'],
+        'manual' => ['Grammar and spelling (read it once)', 'Plagiarism exactly 0% (run a plagiarism checker; raw similarity and unattributed copying)', 'ZeroGPT / AI-detector score (paste it in yourself; no tool here can call it)'],
     ];
 }
 

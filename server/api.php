@@ -18,6 +18,8 @@ require __DIR__ . '/lib/library.php';
 require __DIR__ . '/lib/memory.php';
 require __DIR__ . '/lib/leads.php';
 require __DIR__ . '/lib/content_rules.php';
+require __DIR__ . '/lib/content_quality.php';
+require __DIR__ . '/lib/tutor.php';
 require __DIR__ . '/lib/tasks.php';
 require __DIR__ . '/lib/brain.php';
 require __DIR__ . '/lib/claude.php';
@@ -835,6 +837,199 @@ switch ($route) {
         @chmod($path, 0600);
         security_alert('Content rules badle gaye (' . mb_strlen($text) . ' akshar)', (int) $me['user_id'], 'content_rules');
         json_out(['rules' => $text, 'edited' => true]);
+
+    // ---------- Content Quality & Originality: gates, versions, evidence, correction, owner approval ----------
+    case 'content_quality':
+        $me = require_client();
+        json_out(cq_dashboard((int) $me['user_id']));
+
+    case 'content_consent':
+        $me = require_client();
+        if ($method === 'POST') {
+            kv_set('cq_consent_' . $me['user_id'], !empty($in['allowed']) ? '1' : '0');
+            security_alert(!empty($in['allowed']) ? 'Content text bahari grammar provider ko bhejne ki ijazat di gayi' : 'Bahari provider ki ijazat wapas li gayi', (int) $me['user_id'], 'content_consent');
+        }
+        json_out(['allowed' => cq_consent((int) $me['user_id'])]);
+
+    case 'content_gate_get':
+        $me = require_client();
+        $task = cq_task_or_fail((int) $me['user_id'], (int) ($_GET['id'] ?? 0));
+        $cur = cq_version_get($task['id']);
+        if (!$cur) {
+            json_out(['task' => ['id' => $task['id'], 'title' => $task['title'], 'status' => $task['status']], 'version' => null]);
+        }
+        $want = (int) ($_GET['v'] ?? 0);
+        $ver = $want > 0 ? (cq_version_get($task['id'], $want) ?: $cur) : $cur;
+        $gates = cq_gates($task['id'], $ver['version']);
+        $hist = $pdo->prepare('SELECT version, check_type, provider, kind, score, status, language, detail, started_at, finished_at FROM content_checks WHERE task_id = ? ORDER BY id DESC LIMIT 40');
+        $hist->execute([$task['id']]);
+        $checks = array_map(function ($c) {
+            $d = json_decode((string) $c['detail'], true) ?: [];
+            unset($d['findings']);
+            return $c + ['info' => $d];
+        }, $hist->fetchAll());
+        $find = $pdo->prepare('SELECT detail FROM content_checks WHERE task_id = ? AND version = ? AND check_type = "grammar" ORDER BY id DESC LIMIT 1');
+        $find->execute([$task['id'], $ver['version']]);
+        $fd = json_decode((string) $find->fetchColumn(), true) ?: [];
+        json_out(['task' => ['id' => $task['id'], 'title' => $task['title'], 'status' => $task['status']], 'current_version' => $cur['version'], 'version' => $ver, 'versions' => cq_versions($task['id']),
+            'gates' => $gates, 'checks' => $checks, 'grammar_findings' => array_slice((array) ($fd['findings'] ?? []), 0, 40), 'sources' => cq_sources($task['id']), 'state' => cq_state($task['id']),
+            'consent' => cq_consent((int) $me['user_id']), 'providers' => cq_provider_states((int) $me['user_id']), 'audit' => $pdo->query('SELECT action, detail, created_at FROM content_audit WHERE task_id = ' . (int) $task['id'] . ' ORDER BY id DESC LIMIT 30')->fetchAll()]);
+
+    case 'content_gate_mode':
+        $me = require_client();
+        $task = cq_task_or_fail((int) $me['user_id'], (int) ($in['id'] ?? 0));
+        $state = cq_state($task['id']);
+        if (!in_array($in['mode'] ?? '', ['strict', 'review'], true)) {
+            fail('mode strict ya review');
+        }
+        $state['mode'] = $in['mode'];
+        if ($state['mode'] === 'review') {
+            $state['owner_approved_version'] = $state['publish_authorized_version'] = 0;
+        }
+        cq_state_save($task['id'], $state);
+        cq_audit((int) $me['user_id'], $task['id'], 'mode', $state['mode']);
+        json_out(['mode' => $state['mode']]);
+
+    case 'content_grammar_run':
+        $me = require_client();
+        $task = cq_task_or_fail((int) $me['user_id'], (int) ($in['id'] ?? 0));
+        @set_time_limit(120);
+        try {
+            if (!empty($in['auto_fix'])) {
+                json_out(cq_grammar_auto((int) $me['user_id'], $task['id']));
+            }
+            $cur = cq_version_get($task['id']);
+            json_out(['final' => cq_grammar_run((int) $me['user_id'], $task['id'], (int) ($cur['version'] ?? 0)), 'log' => []]);
+        } catch (InvalidArgumentException | RuntimeException $e) {
+            fail($e->getMessage());
+        }
+
+    case 'content_evidence':
+        $me = require_client();
+        $task = cq_task_or_fail((int) $me['user_id'], (int) ($in['id'] ?? 0));
+        $cur = cq_version_get($task['id']);
+        if (!$cur) {
+            fail('Pehle draft chahiye');
+        }
+        try {
+            json_out(cq_evidence_save((int) $me['user_id'], $task['id'], $cur['version'], (string) ($in['type'] ?? ''), $in));
+        } catch (InvalidArgumentException $e) {
+            fail($e->getMessage());
+        }
+
+    case 'content_sources_save':
+        $me = require_client();
+        $task = cq_task_or_fail((int) $me['user_id'], (int) ($in['id'] ?? 0));
+        try {
+            json_out(['saved' => cq_sources_save((int) $me['user_id'], $task['id'], (array) ($in['sources'] ?? []))]);
+        } catch (InvalidArgumentException $e) {
+            fail($e->getMessage());
+        }
+
+    case 'content_revise':
+        $me = require_client();
+        $task = cq_task_or_fail((int) $me['user_id'], (int) ($in['id'] ?? 0));
+        @set_time_limit(120);
+        try {
+            json_out(cq_revise((int) $me['user_id'], $task['id'], (string) ($in['feedback'] ?? '')));
+        } catch (InvalidArgumentException | RuntimeException $e) {
+            fail($e->getMessage());
+        }
+
+    case 'content_save_version': // the owner edited the article: a new version, which must be verified again from scratch
+        $me = require_client();
+        $task = cq_task_or_fail((int) $me['user_id'], (int) ($in['id'] ?? 0));
+        $cur = cq_version_get($task['id']);
+        $body = (string) ($in['body'] ?? '');
+        if (!$cur || mb_strlen($body) < 20 || mb_strlen($body) > 60000) {
+            fail('Text 20 se 60000 akshar ka chahiye');
+        }
+        $doc = ['body' => $body] + $cur['doc'];
+        foreach (['focus_keyword' => 80, 'seo_title' => 200, 'meta_description' => 400, 'slug' => 120] as $k => $max) {
+            if (isset($in[$k])) {
+                $doc[$k] = mb_substr((string) $in[$k], 0, $max);
+            }
+        }
+        json_out(['version' => cq_version_add((int) $me['user_id'], $task['id'], $doc, 'Owner edit: ' . mb_substr(trim((string) ($in['reason'] ?? '')), 0, 200))]);
+
+    case 'content_approve':
+        $me = require_client();
+        $task = cq_task_or_fail((int) $me['user_id'], (int) ($in['id'] ?? 0));
+        try {
+            json_out(cq_approve((int) $me['user_id'], $task['id'], (string) ($in['step'] ?? '')));
+        } catch (InvalidArgumentException $e) {
+            fail($e->getMessage());
+        }
+
+    // ---------- Class tab: language tutor (learners, daily lesson, correction, quiz, progress) ----------
+    case 'learn_learners':
+        $me = require_client();
+        $st = $pdo->prepare('SELECT * FROM learners WHERE user_id = ? ORDER BY id');
+        $st->execute([$me['user_id']]);
+        $rows = array_map(function ($l) {
+            $p = tutor_progress($l);
+            return $l + ['streak' => $p['streak'], 'due_now' => $p['due_now'], 'words_total' => $p['words_total']];
+        }, $st->fetchAll());
+        json_out(['learners' => $rows, 'levels' => TUTOR_LEVELS, 'minutes' => array_values(array_filter(TUTOR_MINUTES))]);
+
+    case 'learn_learner_save':
+        $me = require_client();
+        try {
+            json_out(['id' => tutor_learner_save((int) $me['user_id'], $in)]);
+        } catch (InvalidArgumentException $e) {
+            fail($e->getMessage());
+        }
+
+    case 'learn_learner_delete':
+        $me = require_client();
+        $l = tutor_learner((int) $me['user_id'], (int) ($in['id'] ?? 0));
+        $pdo->prepare('DELETE FROM learners WHERE id = ? AND user_id = ?')->execute([$l['id'], $me['user_id']]);
+        json_out(['ok' => true]);
+
+    case 'learn_lesson':
+        $me = require_client();
+        $l = tutor_learner((int) $me['user_id'], (int) ($_GET['id'] ?? 0));
+        @set_time_limit(90);
+        try {
+            json_out(tutor_lesson($l) + ['learner' => ['id' => $l['id'], 'name' => $l['name'], 'tts_lang' => $l['tts_lang'], 'target' => $l['target'], 'variant' => $l['variant'], 'native' => $l['native']]]);
+        } catch (RuntimeException $e) {
+            fail('Aaj ka lesson abhi nahi ban paya: ' . $e->getMessage() . '. Thodi der baad dobara kholo.', 502);
+        }
+
+    case 'learn_correct':
+        $me = require_client();
+        $l = tutor_learner((int) $me['user_id'], (int) ($in['id'] ?? 0));
+        $today = $pdo->prepare('SELECT COUNT(*) FROM learn_attempts WHERE learner_id = ? AND day = ? AND kind <> "quiz"');
+        $today->execute([$l['id'], date('Y-m-d')]);
+        if ((int) $today->fetchColumn() >= 60) {
+            fail('Aaj ke liye bahut practice ho gayi, kal phir karenge', 429);
+        }
+        try {
+            json_out(tutor_correct($l, (string) ($in['kind'] ?? 'writing'), (string) ($in['prompt'] ?? ''), (string) ($in['answer'] ?? '')));
+        } catch (InvalidArgumentException $e) {
+            fail($e->getMessage());
+        } catch (RuntimeException $e) {
+            fail('Abhi sudhaar nahi ho paya: ' . $e->getMessage(), 502);
+        }
+
+    case 'learn_quiz':
+        $me = require_client();
+        $l = tutor_learner((int) $me['user_id'], (int) ($_GET['id'] ?? 0));
+        json_out(['questions' => tutor_quiz($l, 5)]);
+
+    case 'learn_quiz_answer':
+        $me = require_client();
+        $l = tutor_learner((int) $me['user_id'], (int) ($in['id'] ?? 0));
+        try {
+            json_out(tutor_quiz_answer($l, (int) ($in['word_id'] ?? 0), (string) ($in['choice'] ?? '')));
+        } catch (InvalidArgumentException $e) {
+            fail($e->getMessage(), 404);
+        }
+
+    case 'learn_progress':
+        $me = require_client();
+        $l = tutor_learner((int) $me['user_id'], (int) ($_GET['id'] ?? 0));
+        json_out(tutor_progress($l));
 
     case 'task_delete':
         $me = require_client();

@@ -168,3 +168,4 @@ android/local.properties
 android/.kotlin/
 docs/SECURITY_PRIVATE.md
 server/content/rules.md
+server/content/*.md
