@@ -141,6 +141,8 @@ class T51_AgentSurvives(unittest.TestCase):
                 self.headers = {}
 
             def get(self, url, **kw):
+                if "agent_poll" not in url:  # the background ticker also uses this session
+                    return mock.Mock(status_code=200)
                 calls["n"] += 1
                 if calls["n"] == 1:
                     raise ValueError("bad json from a proxy")  # not a RequestException
