@@ -153,6 +153,10 @@ function task_finish(int $userId, array $task, string $status, string $note): vo
 {
     task_log((int) $task['id'], $userId, 'jarvis', $note);
     task_set_status($userId, (int) $task['id'], $status);
+    // the chat remembers that the work is ready (short; the whole result is on the Tasks / Content tab and is pushed live to an open chat)
+    $head = trim(explode("\n---\n", $note)[0]);
+    db()->prepare('INSERT INTO chat (user_id, role, content, created_at) VALUES (?,?,?,?)')
+        ->execute([$userId, 'assistant', 'Task #' . $task['id'] . ' (' . mb_substr((string) $task['title'], 0, 80) . '): ' . mb_substr($head, 0, 700), time()]);
 }
 
 /** Do one task that was given to Jarvis. Never throws: problems are written to the task log. */

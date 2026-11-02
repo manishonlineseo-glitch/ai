@@ -492,6 +492,9 @@ function run_tool(string $name, array $in, int $userId): string
     try {
         switch ($name) {
             case 'add_task':
+                if (task_category((string) ($in['category'] ?? 'other')) === 'content') {
+                    $in['assignee'] = 'jarvis'; // content is always written by Jarvis; a model that forgets the assignee must not leave it on the to-do list
+                }
                 try {
                     $id = task_add($userId, (string) ($in['title'] ?? ''), (string) ($in['category'] ?? 'other'), (string) ($in['details'] ?? ''),
                         (string) ($in['assignee'] ?? 'me'), isset($in['due']) ? (string) $in['due'] : null);

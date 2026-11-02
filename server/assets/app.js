@@ -293,9 +293,10 @@ function page(view, ...kids) {
 async function tick() {
   if (document.hidden || !state) return;
   try {
-    const { commands, messages, status } = await api('commands' + (hud ? '&hud=1' : ''));
+    const { commands, messages, status, tasks_finished } = await api('commands' + (hud ? '&hud=1' : ''));
     renderPending(commands, messages || []);
     announceFinished(commands);
+    announceTasks(tasks_finished || []);
     announceProgress(commands);
     if (hud && status) hud.update(status);
     if (tab === 'devices') { renderRecent(commands); loadDevices(); }
@@ -339,6 +340,20 @@ function announceFinished(cmds) {
     const more = c.result_len > 1500 ? '\n… (poora jawab Devices > Recent PC actions me)' : '';
     const text = (c.status === 'done' ? 'Laptop ka kaam khatam (' + c.device + '):\n' : 'Laptop ka kaam fail hua (' + c.device + '):\n') + (c.result || '') + more;
     if (noteHook) note(text); else missedNotes.push(text);
+  }
+}
+
+// Work Jarvis finished on his own (a blog, a plan): announced once in the chat with the whole text; a finished task is never announced twice.
+const tasksSeen = new Set();
+let tasksReady = false;
+function announceTasks(list) {
+  if (!tasksReady) { list.forEach((t) => tasksSeen.add(t.id + ':' + t.updated_at)); tasksReady = true; return; } // first load: stay quiet
+  for (const t of [...list].reverse()) {
+    const key = t.id + ':' + t.updated_at;
+    if (tasksSeen.has(key)) continue;
+    tasksSeen.add(key);
+    const text = 'Jarvis ne Task #' + t.id + ' (' + t.title + ') ka kaam khatam kiya:\n\n' + (t.text || '');
+    if (noteHook) noteHook(text); else missedNotes.push(text); // shown, not read aloud: it can be a 1000-word article
   }
 }
 
@@ -534,15 +549,15 @@ function viewChat(view) {
   const add = (cls, text) => {
     if (empty) { empty.remove(); empty = null; }
     let m;
-    if (cls === 'assistant' && text) {
-      const q = lastQ;
+    if ((cls === 'assistant' || (cls === 'note' && text && text.length > 400)) && text) { // long notes (a finished blog) get Copy too
+      const q = cls === 'assistant' ? lastQ : '';
       const btn = h('button', { class: 'copy-btn', type: 'button', title: 'Sawal aur jawab dono copy karo', 'aria-label': 'Sawal aur jawab copy karo' }, 'Copy');
       btn.addEventListener('click', async () => {
-        const ok = await copyToClipboard((q ? 'Sawal:\n' + q + '\n\n' : '') + 'Jawab:\n' + text);
+        const ok = await copyToClipboard(cls === 'note' ? text : (q ? 'Sawal:\n' + q + '\n\n' : '') + 'Jawab:\n' + text);
         btn.textContent = ok ? 'Copy ho gaya' : 'Copy nahi hua';
         setTimeout(() => { btn.textContent = 'Copy'; }, 1800);
       });
-      m = h('div', { class: 'msg assistant' }, h('div', { class: 'msg-text' }, text), h('div', { class: 'msg-tools' }, btn));
+      m = h('div', { class: 'msg ' + cls }, h('div', { class: 'msg-text' }, text), h('div', { class: 'msg-tools' }, btn));
     } else {
       m = h('div', { class: 'msg ' + cls }, text);
       if (cls === 'user') lastQ = text || '';

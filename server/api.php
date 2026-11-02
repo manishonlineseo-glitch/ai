@@ -1247,6 +1247,15 @@ switch ($route) {
         );
         $st->execute([$me['user_id']]);
         $out = ['commands' => $rows, 'messages' => $st->fetchAll()];
+        // work Jarvis finished by himself (content, news, plans): the open chat announces it once, with the full text to copy
+        $st = $pdo->prepare('SELECT id, title, status, updated_at FROM tasks WHERE user_id = ? AND assignee = "jarvis" AND status IN ("review","done") AND updated_at > ? ORDER BY updated_at DESC LIMIT 5');
+        $st->execute([$me['user_id'], time() - 3 * 86400]);
+        $out['tasks_finished'] = array_map(function ($t) use ($pdo) {
+            $l = $pdo->prepare('SELECT text FROM task_log WHERE task_id = ? AND author = "jarvis" ORDER BY id DESC LIMIT 1');
+            $l->execute([$t['id']]);
+            $t['text'] = mb_substr((string) $l->fetchColumn(), 0, 9000);
+            return $t;
+        }, $st->fetchAll());
         if (($_GET['hud'] ?? '') === '1') {
             $out['status'] = status_payload($me);
         }
