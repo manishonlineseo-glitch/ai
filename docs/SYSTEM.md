@@ -1,7 +1,7 @@
 # Jarvis — digital employee: system guide
 
 > **Living document.** Read "7. Status" and "8. Roadmap" first. After every change update: Status, Changelog (section 9), test counts (section 6).
-> Last updated: 2026-10-28. Security weaknesses and fixes are kept in `docs/SECURITY_PRIVATE.md` (not in git: this repository is public).
+> Last updated: 2026-11-02. Security weaknesses and fixes are kept in `docs/SECURITY_PRIVATE.md` (not in git: this repository is public).
 
 ## 1. Aim
 
@@ -91,7 +91,7 @@ Version: `versionCode 3 / 1.2` in `build.gradle.kts`. **Gradle is not installed 
 * `deploy/` — `deploy.ps1` (push + update server + copy the private content rules), `server-update.sh` (runs on the server: lint, backup, rsync, health check, rollback), `release_tools.py` (makes the signing key, signs and publishes the Windows/Android app), `backup-db.sh` (manual DB copy on the server), `pull-db-backup.ps1` (copies the newest server backup to this PC), `README.md`.
 * `knowledge/education/` (spoken English teacher, learn any language) and `knowledge/content/content-quality-originality.md`: the teaching method and the CQO rules saved in the knowledge library so the model gets them with every lesson / content job.
 * `tests/` — `server_test.py`, `agent_test.py`, `security_test.py`, `content_test.py`, `cq_test.py`, `tutor_test.py`, `keepalive_test.py`, `content_page_test.py`, `live_smoke.py`, `run_all.py`, `last_run.json`, `fixtures/good_article.md`.
-* `docs/` — `SYSTEM.md` (this file), `SECURITY_PRIVATE.md` (not in git).
+* `docs/` — `SYSTEM.md` (this file), `VIDEO_SCRIPT.md` (script, fact sheet and shot list for a video about the system), `SECURITY_PRIVATE.md` (not in git).
 * Repository root (`jarvis.py`, `news.py`, `Face-Recognition/` ...) — the original desktop Jarvis scripts, not part of this system.
 * `server/knowledge/` — playbooks + `mcp_server.py` (knowledge MCP server).
 
@@ -185,7 +185,26 @@ Last full run: **2026-11-02 — 390 tests (379 offline + 11 live), 33 sub-checks
 Measured: chat → queued median 16 ms (max 33); queued → agent poll returns median 163 ms (before the 50 ms poll step).
 **Not tested:** a real command from the Android app to the live server (needs the owner's password), the Android app itself (Kotlin is not compiled on this PC, so the Android signature check and re-login are untested), a real ZeroGPT run, the on-screen banner during a real task, Windows autostart after a reboot, behaviour with 2+ PCs online, load. There is no CI yet — tests run by hand.
 
-## 7. Status (2026-10-28)
+## 7. Status (2026-11-02)
+
+**Live check, 2026-11-02 (everything deployed from commit `263d40a`; read-only checks on the live server and the laptop)**
+
+| Check | Result |
+|---|---|
+| Code on the server = repository | all 31 tracked server code files identical (SHA-256), the private rules file identical, 584 knowledge files on both sides |
+| Database | schema v12 (code expects 12), integrity ok, WAL, foreign keys on, 352 KB; 1 owner, 3 device IDs |
+| Backups | 3 checked copies in `jarvis_data/backups`, newest 17 h old (the scheduler makes one a day) |
+| Agent | "Laptopai" ONLINE (last seen 9 s before the check), watchdog state `on`, not paused |
+| Updates | live manifest = Windows app 1.2.6, signature present and verified with the key built into the app, file hash matches; the laptop's installed exe has the same hash |
+| Files and secrets | `config.php` mode 600; keys set: Gemini, OpenAI (no credits); no Sapling key saved yet; no secret file reachable from the web (live smoke test) |
+| Web | `app.js?v=28` live with the Content, Quality Gate, Provider Settings and Class views; all new routes answer 401 without a login |
+| Live smoke tests | 11 of 11 pass; full suite 390 tests (379 offline + 11 live) pass |
+| Server | PHP 8.2.35, SQLite 3.54.1, curl and mbstring present; disk 58% used |
+| Not fine / not done | the Task Scheduler "KeepAlive" task does **not** exist yet (the owner has not run the script); the laptop app still runs on its old token (login not saved); Gemini still times out now and then (last logged 08:31 UTC, 25 s); OpenAI has no credits; the live `data/security.log` does not exist yet because no security event has happened since it was added |
+| Could not check | any owner-login feature end to end on the live site (the owner's password is not available to Claude); a real Sapling scan (no key); the phone app |
+
+A stray 8 KB test database (`server/data/library/_peek_*.sqlite`, two harmless rows) had been committed by accident on 2026-10-24; it was removed from tracking and `server/data/library/` and logs are now ignored.
+
 
 **Done and working**
 * Device ID + password for every device; agent sign-in without codes; automatic re-login (Windows tested, Android code written but not compiled).
@@ -195,7 +214,7 @@ Measured: chat → queued median 16 ms (max 33); queued → agent poll returns m
 * **Content Rules:** the owner's rules file is enforced by a program checker and a write-check-fix loop; 4 of 4 real live runs passed all required checks. **Content page** in the web app (brief form, history, result with copy buttons, own-text check, rules editor); layout checked in a browser through the page DOM only, a real phone screen was not looked at.
 * **CQO gates and the Class tab (2026-11-02):** see sections 5c and 5d. Real checks done: LanguageTool, a real lesson and a real correction. AI detection: Sapling adapter built and tested against a stub, **real scan with a real key not done yet**; plagiarism API not connected (owner enters real results). Not used yet with a real learner.
 * **Keep-alive (2026-11-02):** offline and back-online alerts to the phone, agent survives stray errors, tray watchdog, keeps the laptop awake on mains power, signed app 1.2.6 installed. The Task Scheduler script exists but **has not been run** (the owner runs it).
-* Deploy by git pull with backup and rollback; 181 automated tests.
+* Deploy by git pull with backup and rollback; 390 automated tests.
 
 **Written but not finished or not verified**
 * The Android APK (login, re-login, signature check) is **not built** (no Gradle on this PC; `versionCode` is 3). Phones still run the old code-pairing APK.
@@ -220,6 +239,7 @@ Measured: chat → queued median 16 ms (max 33); queued → agent poll returns m
 
 | Date | Change |
 |---|---|
+| 2026-11-02 (live check + video script) | Full live check (table in section 7), `docs/VIDEO_SCRIPT.md`, stray test database removed from git. |
 | 2026-11-02 (detector API) | **AI-detection provider:** Sapling adapter with Provider Settings (key saved outside the web root, honest states, consent, zero retention), per-detector results in the gate (no averaging), research notes on Copyleaks/GPTZero/Originality/ZeroGPT. Tests 349 to 390. |
 | 2026-11-02 (CQO + Class) | **Content Quality & Originality gates** (owner's master rulebook): three strict gates, versions, evidence, 3 correction cycles, owner approval then publish authorisation, strict/review mode, LanguageTool grammar provider with consent, dashboard. **Language tutor (Class tab)**: trainer's class plan, daily lesson with diagram, speaking and writing practice with corrections, spaced-repetition quiz, progress, class reminders, American/British and other languages. Teaching method and CQO rules saved in the knowledge library. Schema v12 (additive). Tests 228 to 349. |
 | 2026-11-02 | **Laptop keep-alive:** offline / back-online alerts (watchdog), agent loop survives stray errors, tray watchdog, keep-awake on mains power, `install_keepalive.ps1` for the Scheduled Task, app 1.2.6 (signed). The agent had been closed for days before this was noticed: nothing alerted anyone. Tests 208 to 228. |
