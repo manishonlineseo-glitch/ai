@@ -593,5 +593,18 @@ function content_write(int $userId, string $brief, ?callable $generate = null, i
         }
         $rounds++;
     }
+    // The one purely mechanical rule a model keeps losing between rounds: the keyphrase inside the first image's alt text. The program adds it (plain markup, no change to the writing).
+    $kw = trim((string) $doc['focus_keyword']);
+    if (!$result['pass'] && $kw !== '' && preg_match('/!\[([^\]]*)\]\(/u', $doc['body'], $im) && content_count_phrase($im[1], $kw) === 0) {
+        $alt = trim($im[1]) === '' ? $kw : $kw . ' - ' . trim($im[1]);
+        $patched = $doc;
+        $patched['body'] = preg_replace('/!\[[^\]]*\]\(/u', '![' . str_replace(['\\', '$'], ['\\\\', '\\$'], $alt) . '](', $doc['body'], 1) ?? $doc['body'];
+        $again = content_check($patched);
+        if (count($again['failed']) < count($result['failed'])) {
+            $doc = $patched;
+            $result = $again;
+            $trace[] = ['round' => $rounds, 'failed' => $again['failed'], 'note' => 'keyphrase added to the image alt text by the program'];
+        }
+    }
     return ['doc' => $doc, 'result' => $result, 'rounds' => $rounds, 'trace' => $trace];
 }

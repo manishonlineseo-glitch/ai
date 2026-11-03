@@ -317,11 +317,11 @@ class T35_ParsingAndWriterLoop(unittest.TestCase):
             self.assertIn(must, p)
         self.assertLess(p.index("OWNER RULES"), p.index("BRIEF:"), "rules come before the owner's brief text")
 
-    def test_writer_gives_up_after_four_rounds_and_reports_what_is_left(self):
+    def test_writer_gives_up_after_six_rounds_and_reports_what_is_left(self):
         bad = {**GOOD, "seo_title": "Too short"}
         w = cli({"op": "write", "brief": "x", "drafts": [formatted(bad)]})
         self.assertFalse(w["pass"])
-        self.assertEqual(w["rounds"], 4)
+        self.assertEqual(w["rounds"], 6)
         self.assertTrue(any("SEO title" in f for f in w["failed"]))
 
     def test_a_worse_revision_is_never_kept(self):
@@ -353,7 +353,7 @@ class T36_ContentTask(unittest.TestCase):
         text = "\n".join(t["log"])
         self.assertIn("abhi bhi fail", text)
         self.assertIn("[FAIL]", text)
-        self.assertEqual(t["calls"], 4)
+        self.assertEqual(t["calls"], 6)
 
     def test_never_claims_zerogpt_passed(self):
         t = cli({"op": "task", "title": "Blog", "details": "x", "drafts": [formatted(GOOD)]})
@@ -372,6 +372,40 @@ class T36_ContentTask(unittest.TestCase):
     def test_add_task_tool_accepts_the_content_category(self):
         out = cli({"op": "run_tool_add_task", "title": "Blog about failed payments", "details": "focus keyword payment failed"})
         self.assertIn("Task added", out)
+
+
+class T37_GroundedInTheSourcePage(unittest.TestCase):
+    """The writer reads the page the owner linked; these checks keep it from inventing links, facts or a developer voice."""
+
+    def test_length_the_brief_asked_for_is_enforced(self):
+        words = len(GOOD_BODY.split())
+        short = check(target_words=words * 3)
+        self.assertIn("word_asked", failed_ids(short))
+        self.assertNotIn("word_asked", failed_ids(check(target_words=words)))
+        self.assertNotIn("word_asked", [c["id"] for c in check()["checks"]], "no check when the brief names no length")
+
+    def test_invented_links_fail_and_real_ones_pass(self):
+        real = ["https://shop.example/about", "https://shop.example/contact", "/blog/online-payments", "/blog/settlement-times", "https://www.rbi.org.in"]
+        body = GOOD_BODY + "\n\nRead [our story](/about) or [the plan](/made-up-page).\n"
+        r = check(body=body, known_links=real)
+        self.assertIn("links_real", failed_ids(r))
+        self.assertIn("/made-up-page", status(r, "links_real")["value"])
+        ok = check(body=GOOD_BODY + "\n\nRead [our story](/about) or [contact](https://shop.example/contact).\n", known_links=real)
+        self.assertNotIn("links_real", failed_ids(ok))
+        self.assertNotIn("links_real", [c["id"] for c in check(body=body)["checks"]], "without a source page there is nothing to compare with")
+
+    def test_developer_voice_fails_when_a_source_page_was_used(self):
+        we = GOOD_BODY + "\n\nWe build homes. Our team is proud of our work, and we invite us all to see it.\n"
+        self.assertIn("guide_voice", failed_ids(check(body=we, guide_voice=True)))
+        import re
+        neutral = re.sub(r"\b(we|our|ours|us)\b", "you", GOOD_BODY, flags=re.I)
+        self.assertNotIn("guide_voice", failed_ids(check(body=neutral, guide_voice=True)))
+
+    def test_real_identifiers_from_the_page_must_appear(self):
+        r = check(must_cite=["UPRERAPRJ4514", "info@example.com"])
+        self.assertIn("facts_used", failed_ids(r))
+        body = GOOD_BODY + "\n\nCheck UPRERAPRJ4514 and write to info@example.com.\n"
+        self.assertNotIn("facts_used", failed_ids(check(body=body, must_cite=["UPRERAPRJ4514", "info@example.com"])))
 
 
 if __name__ == "__main__":
