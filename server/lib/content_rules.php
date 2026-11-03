@@ -223,9 +223,9 @@ function content_check(array $doc): array
     $add('slug_kw', 'Focus keyword in the URL slug', $kwWords && !array_diff($kwWords, $slugWords) && preg_match('/^[a-z0-9-]+$/', $slug), $slug, 'all keyword words, a-z 0-9 and hyphens');
     $add('word_count', 'At least 300 words', $wc >= 300, (string) $wc, '300 minimum');
     $add('word_target', 'Practical target 800-1200 words (1500+ for detailed topics)', $wc >= 800, (string) $wc, '800+', false);
-    $tw = (int) ($doc['target_words'] ?? 0); // the owner asked for a length: 90% to 125% of it, no less
+    $tw = (int) ($doc['target_words'] ?? 0); // the owner asked for a length: 85% to 125% of it
     if ($tw > 0) {
-        $add('word_asked', 'Length the brief asked for (' . $tw . ' words)', $wc >= (int) round($tw * 0.9) && $wc <= (int) round($tw * 1.25), (string) $wc, (int) round($tw * 0.9) . '-' . (int) round($tw * 1.25));
+        $add('word_asked', 'Length the brief asked for (' . $tw . ' words)', $wc >= (int) round($tw * 0.85) && $wc <= (int) round($tw * 1.25), (string) $wc, (int) round($tw * 0.85) . '-' . (int) round($tw * 1.25));
     }
 
     $density = ($kw !== '' && $wc > 0) ? content_count_phrase($plain . ' ' . implode(' ', array_column(array_filter($blocks, fn($b) => $b['type'] === 'heading'), 'text')), $kw) * max(count($kwWords), 1) / $wc * 100 : 0.0;
@@ -442,6 +442,22 @@ function content_format_doc(array $d): string
     return "FOCUS_KEYWORD: {$d['focus_keyword']}\nSEO_TITLE: {$d['seo_title']}\nMETA_DESCRIPTION: {$d['meta_description']}\nSLUG: {$d['slug']}\n---\n{$d['body']}";
 }
 
+/** The article writer: the stronger Gemini model first (the small one drifts between correction rounds), the normal chain as the fallback. */
+function content_generate(string $prompt): string
+{
+    if ((string) cfg('gemini_api_key') !== '') {
+        try {
+            return gemini_call((string) (cfg('content_model') ?: 'gemini-3.5-flash'), [
+                'contents'         => [['role' => 'user', 'parts' => [['text' => $prompt]]]],
+                'generationConfig' => ['temperature' => 0.5],
+            ], 60);
+        } catch (RuntimeException $e) {
+            // fall through to the normal chain
+        }
+    }
+    return gemini_text($prompt, 60);
+}
+
 /** "1000-word blog", "1,200 words" in the brief -> 1000 / 1200; null when the owner named no length. */
 function content_requested_words(string $brief): ?int
 {
@@ -523,7 +539,7 @@ function content_source_facts(string $brief): string
  */
 function content_write(int $userId, string $brief, ?callable $generate = null, int $budgetSeconds = 95): array
 {
-    $generate = $generate ?? ($GLOBALS['jarvis_content_generator'] ?? fn(string $p) => gemini_text($p, 60)); // the global is a test hook
+    $generate = $generate ?? ($GLOBALS['jarvis_content_generator'] ?? 'content_generate'); // the global is a test hook
     $rules = content_rules_text();
     $hosts = array_values(array_filter(array_map('trim', preg_split('/[\s,]+/', (string) cfg('content_internal_hosts')) ?: [])));
     $started = time();
